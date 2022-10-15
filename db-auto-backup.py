@@ -45,6 +45,7 @@ def backup_mysql(container: Container) -> str:
 
 BACKUP_MAPPING: Dict[str, BackupCandidate] = {
     "postgres": backup_psql,
+    "timescale/timescaledb": backup_psql,
     "mysql": backup_mysql,
     "mariadb": backup_mysql,  # Basically the same thing
 }
