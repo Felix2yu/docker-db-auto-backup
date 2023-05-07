@@ -1,4 +1,7 @@
-docker==6.0.0
-python-dotenv==0.21.0
-tqdm==4.64.0
+docker==6.1.0
+python-dotenv==1.0.0
+tqdm==4.65.0
 requests
+
+# Use an unreleased version to support non-async jobs
+git+https://github.com/whdev1/pycron@e40f465940f1632b753b75c819364b20ed85e1ca

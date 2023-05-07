@@ -2,17 +2,25 @@
 import fnmatch
 import os
 import sys
+from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import Callable, Dict, Optional, Sequence
+from typing import Callable, Dict, NamedTuple, Optional, Sequence
 
 import docker
+import pycron
 import requests
 from docker.models.containers import Container
 from dotenv import dotenv_values
 from tqdm.auto import tqdm
 
 BackupCandidate = Callable[[Container], str]
+
+
+class BackupProvider(NamedTuple):
+    patterns: list[str]
+    backup_method: BackupCandidate
+    file_extension: str
 
 
 def get_container_env(container: Container) -> Dict[str, Optional[str]]:
@@ -43,39 +51,58 @@ def backup_mysql(container: Container) -> str:
     return f"bash -c 'mysqldump {auth} --all-databases'"
 
 
-BACKUP_MAPPING: Dict[str, BackupCandidate] = {
-    "postgres": backup_psql,
-    "timescale/timescaledb": backup_psql,
-    "mysql": backup_mysql,
-    "mariadb": backup_mysql,  # Basically the same thing
-}
+def backup_redis(container: Container) -> str:
+    """
+    Note: `SAVE` command locks the database, which isn't ideal.
+    Hopefully the commit is fast enough!
+    """
+    return "sh -c 'redis-cli SAVE > /dev/null && cat /data/dump.rdb'"
+
+
+BACKUP_PROVIDERS: list[BackupProvider] = [
+    BackupProvider(
+        patterns=["postgres", "timescale/timescaledb"], backup_method=backup_psql, file_extension="sql"
+    ),
+    BackupProvider(
+        patterns=["mysql", "mariadb", "*/linuxserver/mariadb"],
+        backup_method=backup_mysql,
+        file_extension="sql",
+    ),
+    BackupProvider(
+        patterns=["redis"], backup_method=backup_redis, file_extension="rdb"
+    ),
+]
+
 
 BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/var/backups"))
+SCHEDULE = os.environ.get("SCHEDULE", "@daily")
 SHOW_PROGRESS = sys.stdout.isatty()
 
 
-def get_backup_method(container_names: Sequence[str]) -> Optional[BackupCandidate]:
+def get_backup_provider(container_names: Sequence[str]) -> Optional[BackupProvider]:
     for name in container_names:
-        for container_pattern, backup_candidate in BACKUP_MAPPING.items():
-            if fnmatch.fnmatch(name, container_pattern):
-                return backup_candidate
+        for provider in BACKUP_PROVIDERS:
+            for pattern in provider.patterns:
+                if fnmatch.fnmatch(name, pattern):
+                    return provider
 
     return None
 
 
-def backup() -> None:
+@pycron.cron(SCHEDULE)
+def backup(now: datetime) -> None:
     docker_client = docker.from_env()
 
     backed_up_containers = []
 
     for container in docker_client.containers.list():
         container_names = [tag.rsplit(":", 1)[0] for tag in container.image.tags]
-        backup_method = get_backup_method(container_names)
-        if backup_method is None:
+        backup_provider = get_backup_provider(container_names)
+        if backup_provider is None:
             continue
 
-        backup_command = backup_method(container)
-        backup_file = BACKUP_DIR / f"{container.name}.sql"
+        backup_command = backup_provider.backup_method(container)
+        backup_file = BACKUP_DIR / f"{container.name}.{backup_provider.file_extension}"
         _, output = container.exec_run(backup_command, stream=True, demux=True)
 
         with tqdm.wrapattr(
@@ -94,6 +121,9 @@ def backup() -> None:
 
         backed_up_containers.append(container.name)
 
+    duration = (datetime.now() - now).total_seconds()
+    print(f"Backup complete in {duration:.2f} seconds.")
+
     if healthchecks_id := os.environ.get("HEALTHCHECKS_ID"):
         healthchecks_host = os.environ.get("HEALTHCHECKS_HOST", "hc-ping.com")
         requests.post(
@@ -103,4 +133,8 @@ def backup() -> None:
 
 
 if __name__ == "__main__":
-    backup()
+    if os.environ.get("SCHEDULE"):
+        print(f"Running backup with schedule '{SCHEDULE}'.")
+        pycron.start()
+    else:
+        backup(datetime.now())
