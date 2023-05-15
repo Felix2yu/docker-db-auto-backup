@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import fnmatch
 import os
+import secrets
 import sys
 from datetime import datetime
 from io import StringIO
@@ -14,12 +15,10 @@ from docker.models.containers import Container
 from dotenv import dotenv_values
 from tqdm.auto import tqdm
 
-BackupCandidate = Callable[[Container], str]
-
 
 class BackupProvider(NamedTuple):
     patterns: list[str]
-    backup_method: BackupCandidate
+    backup_method: Callable[[Container], str]
     file_extension: str
 
 
@@ -31,6 +30,14 @@ def get_container_env(container: Container) -> Dict[str, Optional[str]]:
     """
     _, (env_output, _) = container.exec_run("env", demux=True)
     return dict(dotenv_values(stream=StringIO(env_output.decode())))
+
+
+def temp_backup_file_name() -> str:
+    """
+    Create a temporary file to save backups to,
+    then atomically replace backup file
+    """
+    return ".auto-backup-" + secrets.token_hex(4)
 
 
 def backup_psql(container: Container) -> str:
@@ -75,16 +82,15 @@ BACKUP_PROVIDERS: list[BackupProvider] = [
 
 
 BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/var/backups"))
-SCHEDULE = os.environ.get("SCHEDULE", "@daily")
+SCHEDULE = os.environ.get("SCHEDULE", "0 0 * * *")
 SHOW_PROGRESS = sys.stdout.isatty()
 
 
 def get_backup_provider(container_names: Sequence[str]) -> Optional[BackupProvider]:
     for name in container_names:
         for provider in BACKUP_PROVIDERS:
-            for pattern in provider.patterns:
-                if fnmatch.fnmatch(name, pattern):
-                    return provider
+            if any(fnmatch.fnmatch(name, pattern) for pattern in provider.patterns):
+                return provider
 
     return None
 
@@ -101,12 +107,14 @@ def backup(now: datetime) -> None:
         if backup_provider is None:
             continue
 
-        backup_command = backup_provider.backup_method(container)
         backup_file = BACKUP_DIR / f"{container.name}.{backup_provider.file_extension}"
+        backup_temp_file = BACKUP_DIR / temp_backup_file_name()
+
+        backup_command = backup_provider.backup_method(container)
         _, output = container.exec_run(backup_command, stream=True, demux=True)
 
         with tqdm.wrapattr(
-            backup_file.open(mode="wb"),
+            backup_temp_file.open(mode="wb"),
             method="write",
             desc=container.name,
             disable=not SHOW_PROGRESS,
@@ -115,6 +123,8 @@ def backup(now: datetime) -> None:
                 if stdout is None:
                     continue
                 f.write(stdout)
+
+        os.replace(backup_temp_file, backup_file)
 
         if not SHOW_PROGRESS:
             print(container.name)
