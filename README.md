@@ -26,8 +26,7 @@
 | `COMPRESSION` | `plain` | 压缩算法：`gzip` / `lzma` / `xz` / `bz2` / `plain` |
 | `SINGLE_DB_MODE` | `false` | 设为 `true` 时每个数据库单独备份为一个文件，用户数据与系统库分离 |
 | `APPRISE_URLS` | `-` | 逗号分隔的 [Apprise](https://github.com/caronc/apprise) 通知 URL 列表，备份完成后发送通知 |
-| `HEALTHCHECKS_ID` | `-` | [Healthchecks.io](https://healthchecks.io/) Ping ID（UUID 或 PingKey/Slug），备份开始发送 `/start`、成功发送 POST（带容器报告）、失败发送 `/fail` |
-| `HEALTHCHECKS_HOST` | `https://hc-ping.com` | Healthchecks 服务器地址，自建实例时修改 |
+| `HEALTHCHECKS_URL` | `-` | [Healthchecks](https://healthchecks.io/) Ping URL（完整地址，如 `https://hc-ping.com/<uuid>` 或自建 `https://hc.example.com/ping/<uuid>`），脚本会自动附加 `/start`、`/fail` 等后缀 |
 
 ### 单库备份模式（SINGLE_DB_MODE）
 

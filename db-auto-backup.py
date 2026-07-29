@@ -238,8 +238,7 @@ SHOW_PROGRESS = sys.stdout.isatty()
 COMPRESSION = os.environ.get("COMPRESSION", "plain")
 SINGLE_DB_MODE = os.environ.get("SINGLE_DB_MODE", "").lower() in ("true", "1", "yes")
 APPRISE_URLS = os.environ.get("APPRISE_URLS", "")
-HEALTHCHECKS_ID = os.environ.get("HEALTHCHECKS_ID", "")
-HEALTHCHECKS_HOST = os.environ.get("HEALTHCHECKS_HOST", "https://hc-ping.com")
+HEALTHCHECKS_URL = os.environ.get("HEALTHCHECKS_URL", "")
 BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0"))
 
 
@@ -280,10 +279,9 @@ def backup(now: datetime) -> None:
 
     print(f"Found {len(containers)} containers. Backing up to {backup_base}")
 
-    hc_base = None
-    if HEALTHCHECKS_ID:
-        hc_base = f"{HEALTHCHECKS_HOST.rstrip('/')}/{HEALTHCHECKS_ID}"
-        _hc_ping(hc_base + "/start")
+    hc_url = HEALTHCHECKS_URL.rstrip("/")
+    if hc_url:
+        _hc_ping(f"{hc_url}/start")
 
     try:
         for container in containers:
@@ -417,16 +415,16 @@ def backup(now: datetime) -> None:
                     shutil.rmtree(entry, ignore_errors=True)
                     print(f"Cleaned up old backup: {entry.name}")
 
-        if hc_base:
+        if hc_url:
             container_list = "\n".join(f"  - {name}" for name in backed_up_containers)
             _hc_ping(
-                hc_base,
+                hc_url,
                 data=f"成功备份 {len(backed_up_containers)} 个容器，耗时 {duration:.2f} 秒。\n\n已备份容器:\n{container_list}",
             )
 
     except Exception:
-        if hc_base:
-            _hc_ping(hc_base + "/fail")
+        if hc_url:
+            _hc_ping(f"{hc_url}/fail")
         raise
 
 
