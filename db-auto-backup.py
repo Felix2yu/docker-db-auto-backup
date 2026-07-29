@@ -238,6 +238,9 @@ SHOW_PROGRESS = sys.stdout.isatty()
 COMPRESSION = os.environ.get("COMPRESSION", "plain")
 SINGLE_DB_MODE = os.environ.get("SINGLE_DB_MODE", "").lower() in ("true", "1", "yes")
 APPRISE_URLS = os.environ.get("APPRISE_URLS", "")
+HEALTHCHECKS_ID = os.environ.get("HEALTHCHECKS_ID", "")
+HEALTHCHECKS_HOST = os.environ.get("HEALTHCHECKS_HOST", "https://hc-ping.com")
+UPTIME_KUMA_URL = os.environ.get("UPTIME_KUMA_URL", "")
 BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0"))
 
 
@@ -389,6 +392,23 @@ def backup(now: datetime) -> None:
                     f"已备份容器:\n{container_list}"
                 ),
             )
+
+    if HEALTHCHECKS_ID:
+        import urllib.request
+
+        health_url = f"{HEALTHCHECKS_HOST.rstrip('/')}/{HEALTHCHECKS_ID}"
+        try:
+            urllib.request.urlopen(health_url, timeout=10)
+        except Exception as e:
+            print(f"Healthchecks ping failed: {e}")
+
+    if UPTIME_KUMA_URL:
+        import urllib.request
+
+        try:
+            urllib.request.urlopen(UPTIME_KUMA_URL, timeout=10)
+        except Exception as e:
+            print(f"Uptime Kuma ping failed: {e}")
 
     if BACKUP_RETENTION_DAYS > 0:
         cutoff = now.timestamp() - BACKUP_RETENTION_DAYS * 86400
