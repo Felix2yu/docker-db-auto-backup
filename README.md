@@ -1,51 +1,72 @@
 # docker-db-auto-backup
 
-![](https://github.com/RealOrangeOne/docker-db-auto-backup/workflows/CI/badge.svg)
+自动备份 Docker 宿主上所有运行中的数据库容器，支持可选的压缩功能。
 
-A script to automatically back up all databases running under docker on a host, with optional compression support.
+## 支持的数据库
 
-## Supported databases
-
-- MySQL
-- MariaDB
-  - [LSIO's MariaDB](https://github.com/linuxserver/docker-mariadb/)
-- PostgreSQL
-  - [TimescaleDB](https://www.timescale.com/)
-  - [pgvecto.rs](https://github.com/tensorchord/pgvecto.rs)
-  - [pgvector](https://github.com/pgvector/pgvector),
-  - Nextcloud's [AIO](https://github.com/nextcloud/all-in-one)
-  - [pgautoupgrade](https://github.com/pgautoupgrade/docker-pgautoupgrade)
-  - Immich's [Postgres VectorChord](https://ghcr.io/immich-app/postgres)
+- MySQL / MariaDB（包括 linuxserver/mariadb）
+- PostgreSQL（包括 TimescaleDB、pgvecto.rs、pgvector、Nextcloud AIO、pgautoupgrade、Immich Postgres VectorChord、PostGIS 等）
 - Redis
 
-## Installation
+## 安装
 
-This container requires access to the docker socket. This can be done either by mounting `/var/lib/docker.sock`, or using a HTTP proxy to provide it through `$DOCKER_HOST`.
+容器需要访问 Docker socket。可以挂载 `/var/run/docker.sock`，或通过 `$DOCKER_HOST` 使用 HTTP 代理提供。
 
-Mount your backup directory as `/var/backups` (or override `$BACKUP_DIR`). Backups will be saved here based on the name of the container. Backups are not dated or compressed.
+将备份目录挂载到 `/var/backups`（或通过 `$BACKUP_DIR` 覆盖）。备份文件按容器名保存。
 
-Backups run daily at midnight. To change this, add a cron-style schedule to `$SCHEDULE`. For more information on the format of the cron strings, please see the [croniter documentation on PyPI](https://pypi.org/project/croniter/).
+备份默认在每天凌晨运行。修改 `$SCHEDULE` 可自定义 cron 调度表达式，格式参考 [croniter 文档](https://pypi.org/project/croniter/)。
 
-### Success hooks
+### 环境变量
 
-When backups are completed successfully, a request can be made to the URL defined in `$SUCCESS_HOOK_URL`. By default, a `GET` request is made. To include logs, also set `$INCLUDE_LOGS` to a non-empty value, which sends a `POST` request instead with helpful details in the body.
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `BACKUP_DIR` | `/var/backups` | 备份输出目录 |
+| `SCHEDULE` | `0 0 * * *` | cron 调度表达式（设为空字符串则立即执行一次） |
+| `COMPRESSION` | `plain` | 压缩算法：`gzip` / `lzma` / `xz` / `bz2` / `plain` |
+| `SINGLE_DB_MODE` | `false` | 设为 `true` 时每个数据库单独备份为一个文件，用户数据与系统库分离 |
+| `APPRISE_URLS` | `-` | 逗号分隔的 [Apprise](https://github.com/caronc/apprise) 通知 URL 列表，备份完成后发送通知 |
 
-Note: Previous versions also supported `$HEALTHCHECKS_ID`, `$HEALTHCHECKS_HOST` and `$UPTIME_KUMA_URL`, or native support for [healthchecks.io](https://healthchecks.io) and [Uptime Kuma](https://github.com/louislam/uptime-kuma/) respectively. These are all still supported, however `$SUCCESS_HOOK_URL` is preferred.
+### 单库备份模式（SINGLE_DB_MODE）
 
-### Compression
+默认情况下，PostgreSQL 使用 `pg_dumpall`、MySQL 使用 `mysqldump --all-databases` 将容器内所有数据库导出到一个文件。
 
-Files are backed up uncompressed by default, on the assumption a snapshotting or native compressed filesystem is being used (eg ZFS). To enable compression, set `$COMPRESSION` to one of the supported algorithms:
+设置 `SINGLE_DB_MODE=true` 后，会逐个枚举数据库并单独备份：
+
+- **用户库** → `{BACKUP_DIR}/{容器名}/{库名}.sql{压缩后缀}`
+- **系统库** → `{BACKUP_DIR}/{容器名}/system/{库名}.sql{压缩后缀}`
+
+系统数据库识别规则：
+
+| 数据库 | 系统库 |
+|--------|--------|
+| PostgreSQL | `postgres`, `template0`, `template1` |
+| MySQL / MariaDB | `information_schema`, `mysql`, `performance_schema`, `sys` |
+
+### 通知（Apprise）
+
+备份完成后可通过 [Apprise](https://github.com/caronc/apprise) 发送通知到多种渠道，如 Slack、Discord、Telegram、邮件、Pushover 等。
+
+`APPRISE_URLS` 为逗号分隔的 Apprise URL 列表，例如：
+
+```yml
+environment:
+  - APPRISE_URLS=slack://token-a/token-b/token-c,mailto://user:pass@gmail.com
+```
+
+Apprise 支持 100+ 通知渠道，URL 格式见 [Apprise Wiki](https://github.com/caronc/apprise/wiki)。
+
+### 压缩
+
+默认不压缩备份文件（假设底层使用 ZFS 等快照或压缩文件系统）。设置 `$COMPRESSION` 可启用压缩：
 
 - `gzip`
 - `lzma` / `xz`
 - `bz2`
-- `plain` (no compression - the default)
+- `plain`（不压缩，默认值）
 
-### Example `docker-compose.yml`
+### 示例 docker-compose.yml
 
 ```yml
-version: "2.3"
-
 services:
   backup:
     image: ghcr.io/realorangeone/db-auto-backup:latest
@@ -54,10 +75,15 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./backups:/var/backups
     environment:
-      - SUCCESS_HOOK_URL=https://hc-ping.com/1234
-      - INCLUDE_LOGS=true
+      - APPRISE_URLS=slack://token-a/token-b/token-c
+      - SINGLE_DB_MODE=true
 ```
 
-### Oneshot
+### 一次性运行
 
-You may want to use this container to run backups just once, rather than on a schedule. To achieve this, set `$SCHEDULE` to an empty string, and the backup will run just once. This may be useful in conjunction with an external scheduler.
+将 `$SCHEDULE` 设为空字符串即可立即执行一次备份，不与外部调度器冲突：
+
+```yml
+environment:
+  - SCHEDULE=
+```
