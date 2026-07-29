@@ -127,7 +127,18 @@ def backup_psql_single(container: Container) -> list[tuple[str, str, bool]]:
     env = get_container_env(container)
     user = env.get("POSTGRES_USER", "postgres")
 
-    exit_code, output = container.exec_run(f"psql -U {user} -l -t -A", demux=True)
+    exit_code, output = container.exec_run(
+        [
+            "psql",
+            "-U",
+            user,
+            "-t",
+            "-A",
+            "-c",
+            "SELECT datname FROM pg_database ORDER BY datname",
+        ],
+        demux=True,
+    )
     if exit_code != 0:
         raise RuntimeError(f"Failed to list databases for {container.name}: {output}")
 
@@ -140,9 +151,8 @@ def backup_psql_single(container: Container) -> list[tuple[str, str, bool]]:
         line = line.strip()
         if not line:
             continue
-        db_name = line.split("|")[0].strip()
-        is_system = db_name in SYSTEM_DATABASES_POSTGRES
-        databases.append((db_name, f"pg_dump -U {user} -d {db_name}", is_system))
+        is_system = line in SYSTEM_DATABASES_POSTGRES
+        databases.append((line, f"pg_dump -U {user} -d {line}", is_system))
 
     return databases
 
@@ -163,7 +173,7 @@ def backup_mysql_single(container: Container) -> list[tuple[str, str, bool]]:
         backup_binary = "mysqldump"
 
     exit_code, output = container.exec_run(
-        f"bash -c 'mysql -u root {auth} -e \"SHOW DATABASES\" -s --skip-column-names'",
+        f"bash -c 'mysql -u root {auth} -e \"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME\" -s --skip-column-names'",
         demux=True,
     )
     if exit_code != 0:
