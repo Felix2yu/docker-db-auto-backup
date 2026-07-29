@@ -191,7 +191,7 @@ BACKUP_PROVIDERS: list[BackupProvider] = [
             "postgres",
             "tensorchord/pgvecto-rs",
             "nextcloud/aio-postgresql",
-            "timescale/timescaledb",
+            "timescale/timescaledb*",
             "pgvector/pgvector",
             "pgautoupgrade/pgautoupgrade",
             "immich-app/postgres",
@@ -267,44 +267,55 @@ def backup(now: datetime) -> None:
         if backup_provider is None:
             continue
 
+        backed_up = False
         if SINGLE_DB_MODE and backup_provider.single_db_method:
-            db_list = backup_provider.single_db_method(container)
-            for db_name, db_command, is_system in db_list:
-                if is_system:
-                    db_dir = BACKUP_DIR / container.name / "system"
-                else:
-                    db_dir = BACKUP_DIR / container.name
-                db_dir.mkdir(parents=True, exist_ok=True)
-
-                backup_file = (
-                    db_dir
-                    / f"{db_name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
+            try:
+                db_list = backup_provider.single_db_method(container)
+            except Exception as e:
+                print(
+                    f"Warning: single-db mode failed for {container.name}: {e}, "
+                    "falling back to default"
                 )
-                backup_temp_file_path = db_dir / temp_backup_file_name()
+            else:
+                for db_name, db_command, is_system in db_list:
+                    if is_system:
+                        db_dir = BACKUP_DIR / container.name / "system"
+                    else:
+                        db_dir = BACKUP_DIR / container.name
+                    db_dir.mkdir(parents=True, exist_ok=True)
 
-                _, output = container.exec_run(db_command, stream=True, demux=True)
+                    backup_file = (
+                        db_dir
+                        / f"{db_name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
+                    )
+                    backup_temp_file_path = db_dir / temp_backup_file_name()
 
-                description = f"{container.name}/{db_name} ({backup_provider.name})"
+                    _, output = container.exec_run(db_command, stream=True, demux=True)
 
-                with open_file_compressed(
-                    backup_temp_file_path, COMPRESSION
-                ) as backup_temp_file:
-                    with tqdm.wrapattr(
-                        backup_temp_file,
-                        method="write",
-                        desc=description,
-                        disable=not SHOW_PROGRESS,
-                    ) as f:
-                        for stdout, _ in output:
-                            if stdout is None:
-                                continue
-                            f.write(stdout)
+                    description = f"{container.name}/{db_name} ({backup_provider.name})"
 
-                os.replace(backup_temp_file_path, backup_file)
+                    with open_file_compressed(
+                        backup_temp_file_path, COMPRESSION
+                    ) as backup_temp_file:
+                        with tqdm.wrapattr(
+                            backup_temp_file,
+                            method="write",
+                            desc=description,
+                            disable=not SHOW_PROGRESS,
+                        ) as f:
+                            for stdout, _ in output:
+                                if stdout is None:
+                                    continue
+                                f.write(stdout)
 
-                if not SHOW_PROGRESS:
-                    print(description)
-        else:
+                    os.replace(backup_temp_file_path, backup_file)
+
+                    if not SHOW_PROGRESS:
+                        print(description)
+
+                backed_up = True
+
+        if not backed_up:
             backup_file = (
                 BACKUP_DIR
                 / f"{container.name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
