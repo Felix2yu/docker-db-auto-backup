@@ -169,11 +169,13 @@ def backup_mysql_single(container: Container) -> list[tuple[str, str, bool]]:
 
     if binary_exists_in_container(container, "mariadb-dump"):
         backup_binary = "mariadb-dump"
+        client_binary = "mariadb"
     else:
         backup_binary = "mysqldump"
+        client_binary = "mysql"
 
     exit_code, output = container.exec_run(
-        f"bash -c 'mysql -u root {auth} -e \"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME\" -s --skip-column-names'",
+        f"bash -c '{client_binary} -u root {auth} -e \"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME\" -s --skip-column-names'",
         demux=True,
     )
     if exit_code != 0:
