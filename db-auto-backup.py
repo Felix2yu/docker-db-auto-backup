@@ -146,7 +146,7 @@ def backup_psql_single(container: Container) -> list[tuple[str, str, bool]]:
     if stdout is None:
         return []
 
-    databases = []
+    databases = [("globals", f"pg_dumpall --globals-only -U {user}", True)]
     for line in stdout.decode().strip().split("\n"):
         line = line.strip()
         if not line:
