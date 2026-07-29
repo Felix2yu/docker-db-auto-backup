@@ -12,7 +12,7 @@
 
 容器需要访问 Docker socket。可以挂载 `/var/run/docker.sock`，或通过 `$DOCKER_HOST` 使用 HTTP 代理提供。
 
-将备份目录挂载到 `/var/backups`（或通过 `$BACKUP_DIR` 覆盖）。备份文件按容器名保存。
+将备份目录挂载到 `/var/backups`（或通过 `$BACKUP_DIR` 覆盖）。备份文件按 `{日期}/{容器名}` 组织。
 
 备份默认在每天凌晨运行。修改 `$SCHEDULE` 可自定义 cron 调度表达式，格式参考 [croniter 文档](https://pypi.org/project/croniter/)。
 
@@ -21,6 +21,7 @@
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `BACKUP_DIR` | `/var/backups` | 备份输出目录 |
+| `BACKUP_RETENTION_DAYS` | `0` | 备份保留天数，超过该天数的日期目录会被自动删除。`0` 表示永久保留 |
 | `SCHEDULE` | `0 0 * * *` | cron 调度表达式（设为空字符串则立即执行一次） |
 | `COMPRESSION` | `plain` | 压缩算法：`gzip` / `lzma` / `xz` / `bz2` / `plain` |
 | `SINGLE_DB_MODE` | `false` | 设为 `true` 时每个数据库单独备份为一个文件，用户数据与系统库分离 |
@@ -32,8 +33,11 @@
 
 设置 `SINGLE_DB_MODE=true` 后，会逐个枚举数据库并单独备份：
 
-- **用户库** → `{BACKUP_DIR}/{容器名}/{库名}.sql{压缩后缀}`
-- **系统库** → `{BACKUP_DIR}/{容器名}/system/{库名}.sql{压缩后缀}`
+- **用户库** → `{BACKUP_DIR}/{日期}/{容器名}/{库名}.sql{压缩后缀}`
+- **系统库** → `{BACKUP_DIR}/{日期}/{容器名}/system/{库名}.sql{压缩后缀}`
+- **集群全局对象**（PostgreSQL 单库模式） → `{BACKUP_DIR}/{日期}/{容器名}/system/globals.sql{压缩后缀}`
+
+日期格式为 `YYYY-MM-DD`，例如 `2026-07-29`。
 
 系统数据库识别规则：
 

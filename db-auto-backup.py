@@ -5,6 +5,7 @@ import gzip
 import lzma
 import os
 import secrets
+import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -237,6 +238,7 @@ SHOW_PROGRESS = sys.stdout.isatty()
 COMPRESSION = os.environ.get("COMPRESSION", "plain")
 SINGLE_DB_MODE = os.environ.get("SINGLE_DB_MODE", "").lower() in ("true", "1", "yes")
 APPRISE_URLS = os.environ.get("APPRISE_URLS", "")
+BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0"))
 
 
 def get_backup_provider(container_names: Iterable[str]) -> Optional[BackupProvider]:
@@ -387,6 +389,19 @@ def backup(now: datetime) -> None:
                     f"已备份容器:\n{container_list}"
                 ),
             )
+
+    if BACKUP_RETENTION_DAYS > 0:
+        cutoff = now.timestamp() - BACKUP_RETENTION_DAYS * 86400
+        for entry in BACKUP_DIR.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                dir_date = datetime.strptime(entry.name, "%Y-%m-%d").timestamp()
+            except ValueError:
+                continue
+            if dir_date < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
+                print(f"Cleaned up old backup: {entry.name}")
 
 
 if __name__ == "__main__":
