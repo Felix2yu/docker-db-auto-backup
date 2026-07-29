@@ -240,7 +240,6 @@ SINGLE_DB_MODE = os.environ.get("SINGLE_DB_MODE", "").lower() in ("true", "1", "
 APPRISE_URLS = os.environ.get("APPRISE_URLS", "")
 HEALTHCHECKS_ID = os.environ.get("HEALTHCHECKS_ID", "")
 HEALTHCHECKS_HOST = os.environ.get("HEALTHCHECKS_HOST", "https://hc-ping.com")
-UPTIME_KUMA_URL = os.environ.get("UPTIME_KUMA_URL", "")
 BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0"))
 
 
@@ -281,147 +280,167 @@ def backup(now: datetime) -> None:
 
     print(f"Found {len(containers)} containers. Backing up to {backup_base}")
 
-    for container in containers:
-        container_names = get_container_names(container)
-        backup_provider = get_backup_provider(container_names)
-        if backup_provider is None:
-            continue
-
-        backed_up = False
-        if SINGLE_DB_MODE and backup_provider.single_db_method:
-            try:
-                db_list = backup_provider.single_db_method(container)
-            except Exception as e:
-                print(
-                    f"Warning: single-db mode failed for {container.name}: {e}, "
-                    "falling back to default"
-                )
-            else:
-                for db_name, db_command, is_system in db_list:
-                    if is_system:
-                        db_dir = backup_base / container.name / "system"
-                    else:
-                        db_dir = backup_base / container.name
-                    db_dir.mkdir(parents=True, exist_ok=True)
-
-                    backup_file = (
-                        db_dir
-                        / f"{db_name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
-                    )
-                    backup_temp_file_path = db_dir / temp_backup_file_name()
-
-                    _, output = container.exec_run(db_command, stream=True, demux=True)
-
-                    description = f"{container.name}/{db_name} ({backup_provider.name})"
-
-                    with open_file_compressed(
-                        backup_temp_file_path, COMPRESSION
-                    ) as backup_temp_file:
-                        with tqdm.wrapattr(
-                            backup_temp_file,
-                            method="write",
-                            desc=description,
-                            disable=not SHOW_PROGRESS,
-                        ) as f:
-                            for stdout, _ in output:
-                                if stdout is None:
-                                    continue
-                                f.write(stdout)
-
-                    os.replace(backup_temp_file_path, backup_file)
-
-                    if not SHOW_PROGRESS:
-                        print(description)
-
-                backed_up = True
-
-        if not backed_up:
-            backup_file = (
-                backup_base
-                / f"{container.name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
-            )
-            backup_temp_file_path = backup_base / temp_backup_file_name()
-
-            backup_command = backup_provider.backup_method(container)
-            _, output = container.exec_run(backup_command, stream=True, demux=True)
-
-            description = f"{container.name} ({backup_provider.name})"
-
-            with open_file_compressed(
-                backup_temp_file_path, COMPRESSION
-            ) as backup_temp_file:
-                with tqdm.wrapattr(
-                    backup_temp_file,
-                    method="write",
-                    desc=description,
-                    disable=not SHOW_PROGRESS,
-                ) as f:
-                    for stdout, _ in output:
-                        if stdout is None:
-                            continue
-                        f.write(stdout)
-
-            os.replace(backup_temp_file_path, backup_file)
-
-            if not SHOW_PROGRESS:
-                print(description)
-
-        backed_up_containers.append(container.name)
-
-    duration = (datetime.now() - now).total_seconds()
-    print(
-        f"Backup of {len(backed_up_containers)} containers complete in {duration:.2f} seconds."
-    )
-
-    if APPRISE_URLS:
-        import apprise
-
-        apobj = apprise.Apprise()
-        for url in APPRISE_URLS.split(","):
-            url = url.strip()
-            if url:
-                apobj.add(url)
-
-        if apobj.urls:
-            container_list = "\n".join(f"  - {name}" for name in backed_up_containers)
-            apobj.notify(
-                title="数据库备份完成",
-                body=(
-                    f"成功备份 {len(backed_up_containers)} 个容器，"
-                    f"耗时 {duration:.2f} 秒。\n\n"
-                    f"已备份容器:\n{container_list}"
-                ),
-            )
-
+    hc_base = None
     if HEALTHCHECKS_ID:
-        import urllib.request
+        hc_base = f"{HEALTHCHECKS_HOST.rstrip('/')}/{HEALTHCHECKS_ID}"
+        _hc_ping(hc_base + "/start")
 
-        health_url = f"{HEALTHCHECKS_HOST.rstrip('/')}/{HEALTHCHECKS_ID}"
-        try:
-            urllib.request.urlopen(health_url, timeout=10)
-        except Exception as e:
-            print(f"Healthchecks ping failed: {e}")
-
-    if UPTIME_KUMA_URL:
-        import urllib.request
-
-        try:
-            urllib.request.urlopen(UPTIME_KUMA_URL, timeout=10)
-        except Exception as e:
-            print(f"Uptime Kuma ping failed: {e}")
-
-    if BACKUP_RETENTION_DAYS > 0:
-        cutoff = now.timestamp() - BACKUP_RETENTION_DAYS * 86400
-        for entry in BACKUP_DIR.iterdir():
-            if not entry.is_dir():
+    try:
+        for container in containers:
+            container_names = get_container_names(container)
+            backup_provider = get_backup_provider(container_names)
+            if backup_provider is None:
                 continue
-            try:
-                dir_date = datetime.strptime(entry.name, "%Y-%m-%d").timestamp()
-            except ValueError:
-                continue
-            if dir_date < cutoff:
-                shutil.rmtree(entry, ignore_errors=True)
-                print(f"Cleaned up old backup: {entry.name}")
+
+            backed_up = False
+            if SINGLE_DB_MODE and backup_provider.single_db_method:
+                try:
+                    db_list = backup_provider.single_db_method(container)
+                except Exception as e:
+                    print(
+                        f"Warning: single-db mode failed for {container.name}: {e}, "
+                        "falling back to default"
+                    )
+                else:
+                    for db_name, db_command, is_system in db_list:
+                        if is_system:
+                            db_dir = backup_base / container.name / "system"
+                        else:
+                            db_dir = backup_base / container.name
+                        db_dir.mkdir(parents=True, exist_ok=True)
+
+                        backup_file = (
+                            db_dir
+                            / f"{db_name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
+                        )
+                        backup_temp_file_path = db_dir / temp_backup_file_name()
+
+                        _, output = container.exec_run(
+                            db_command, stream=True, demux=True
+                        )
+
+                        description = (
+                            f"{container.name}/{db_name} ({backup_provider.name})"
+                        )
+
+                        with open_file_compressed(
+                            backup_temp_file_path, COMPRESSION
+                        ) as backup_temp_file:
+                            with tqdm.wrapattr(
+                                backup_temp_file,
+                                method="write",
+                                desc=description,
+                                disable=not SHOW_PROGRESS,
+                            ) as f:
+                                for stdout, _ in output:
+                                    if stdout is None:
+                                        continue
+                                    f.write(stdout)
+
+                        os.replace(backup_temp_file_path, backup_file)
+
+                        if not SHOW_PROGRESS:
+                            print(description)
+
+                    backed_up = True
+
+            if not backed_up:
+                backup_file = (
+                    backup_base
+                    / f"{container.name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
+                )
+                backup_temp_file_path = backup_base / temp_backup_file_name()
+
+                backup_command = backup_provider.backup_method(container)
+                _, output = container.exec_run(backup_command, stream=True, demux=True)
+
+                description = f"{container.name} ({backup_provider.name})"
+
+                with open_file_compressed(
+                    backup_temp_file_path, COMPRESSION
+                ) as backup_temp_file:
+                    with tqdm.wrapattr(
+                        backup_temp_file,
+                        method="write",
+                        desc=description,
+                        disable=not SHOW_PROGRESS,
+                    ) as f:
+                        for stdout, _ in output:
+                            if stdout is None:
+                                continue
+                            f.write(stdout)
+
+                os.replace(backup_temp_file_path, backup_file)
+
+                if not SHOW_PROGRESS:
+                    print(description)
+
+            backed_up_containers.append(container.name)
+
+        duration = (datetime.now() - now).total_seconds()
+        print(
+            f"Backup of {len(backed_up_containers)} containers complete in {duration:.2f} seconds."
+        )
+
+        if APPRISE_URLS:
+            import apprise
+
+            apobj = apprise.Apprise()
+            for url in APPRISE_URLS.split(","):
+                url = url.strip()
+                if url:
+                    apobj.add(url)
+
+            if apobj.urls:
+                container_list = "\n".join(
+                    f"  - {name}" for name in backed_up_containers
+                )
+                apobj.notify(
+                    title="数据库备份完成",
+                    body=(
+                        f"成功备份 {len(backed_up_containers)} 个容器，"
+                        f"耗时 {duration:.2f} 秒。\n\n"
+                        f"已备份容器:\n{container_list}"
+                    ),
+                )
+
+        if BACKUP_RETENTION_DAYS > 0:
+            cutoff = now.timestamp() - BACKUP_RETENTION_DAYS * 86400
+            for entry in BACKUP_DIR.iterdir():
+                if not entry.is_dir():
+                    continue
+                try:
+                    dir_date = datetime.strptime(entry.name, "%Y-%m-%d").timestamp()
+                except ValueError:
+                    continue
+                if dir_date < cutoff:
+                    shutil.rmtree(entry, ignore_errors=True)
+                    print(f"Cleaned up old backup: {entry.name}")
+
+        if hc_base:
+            container_list = "\n".join(f"  - {name}" for name in backed_up_containers)
+            _hc_ping(
+                hc_base,
+                data=f"成功备份 {len(backed_up_containers)} 个容器，耗时 {duration:.2f} 秒。\n\n已备份容器:\n{container_list}",
+            )
+
+    except Exception:
+        if hc_base:
+            _hc_ping(hc_base + "/fail")
+        raise
+
+
+def _hc_ping(url: str, data: str = "") -> None:
+    import urllib.request
+
+    try:
+        if data:
+            req = urllib.request.Request(url, data=data.encode(), method="POST")
+            urllib.request.urlopen(req, timeout=10)
+        else:
+            urllib.request.urlopen(url, timeout=10)
+    except Exception as e:
+        print(f"Healthchecks ping failed ({url}): {e}")
 
 
 if __name__ == "__main__":

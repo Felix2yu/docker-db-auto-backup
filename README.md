@@ -26,9 +26,8 @@
 | `COMPRESSION` | `plain` | 压缩算法：`gzip` / `lzma` / `xz` / `bz2` / `plain` |
 | `SINGLE_DB_MODE` | `false` | 设为 `true` 时每个数据库单独备份为一个文件，用户数据与系统库分离 |
 | `APPRISE_URLS` | `-` | 逗号分隔的 [Apprise](https://github.com/caronc/apprise) 通知 URL 列表，备份完成后发送通知 |
-| `HEALTHCHECKS_ID` | `-` | [Healthchecks.io](https://healthchecks.io/) Ping ID，备份成功后会向 `{HEALTHCHECKS_HOST}/{HEALTHCHECKS_ID}` 发送 GET 请求 |
+| `HEALTHCHECKS_ID` | `-` | [Healthchecks.io](https://healthchecks.io/) Ping ID（UUID 或 PingKey/Slug），备份开始发送 `/start`、成功发送 POST（带容器报告）、失败发送 `/fail` |
 | `HEALTHCHECKS_HOST` | `https://hc-ping.com` | Healthchecks 服务器地址，自建实例时修改 |
-| `UPTIME_KUMA_URL` | `-` | [Uptime Kuma](https://github.com/louislam/uptime-kuma) Push 完整 URL，备份成功后 GET 请求该地址 |
 
 ### 单库备份模式（SINGLE_DB_MODE）
 
