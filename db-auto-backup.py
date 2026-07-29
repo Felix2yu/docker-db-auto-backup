@@ -271,7 +271,10 @@ def backup(now: datetime) -> None:
 
     backed_up_containers = []
 
-    print(f"Found {len(containers)} containers.")
+    date_dir = now.strftime("%Y-%m-%d")
+    backup_base = BACKUP_DIR / date_dir
+
+    print(f"Found {len(containers)} containers. Backing up to {backup_base}")
 
     for container in containers:
         container_names = get_container_names(container)
@@ -291,9 +294,9 @@ def backup(now: datetime) -> None:
             else:
                 for db_name, db_command, is_system in db_list:
                     if is_system:
-                        db_dir = BACKUP_DIR / container.name / "system"
+                        db_dir = backup_base / container.name / "system"
                     else:
-                        db_dir = BACKUP_DIR / container.name
+                        db_dir = backup_base / container.name
                     db_dir.mkdir(parents=True, exist_ok=True)
 
                     backup_file = (
@@ -329,10 +332,10 @@ def backup(now: datetime) -> None:
 
         if not backed_up:
             backup_file = (
-                BACKUP_DIR
+                backup_base
                 / f"{container.name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
             )
-            backup_temp_file_path = BACKUP_DIR / temp_backup_file_name()
+            backup_temp_file_path = backup_base / temp_backup_file_name()
 
             backup_command = backup_provider.backup_method(container)
             _, output = container.exec_run(backup_command, stream=True, demux=True)
