@@ -25,7 +25,9 @@ class BackupProvider:
     patterns: list[str]
     backup_method: Callable[[Container], str]
     file_extension: str
-    single_db_method: Optional[Callable[[Container], list[tuple[str, str, bool]]]] = None
+    single_db_method: Optional[Callable[[Container], list[tuple[str, str, bool]]]] = (
+        None
+    )
 
 
 def get_container_env(container: Container) -> Dict[str, Optional[str]]:
@@ -60,7 +62,7 @@ def open_file_compressed(file_path: Path, algorithm: str) -> IO[bytes]:
     file_path.touch(mode=0o600)
 
     if algorithm == "gzip":
-        return gzip.open(file_path, mode="wb")  # type:ignore
+        return gzip.open(file_path, mode="wb")  # type: ignore
     elif algorithm in ["lzma", "xz"]:
         return lzma.open(file_path, mode="wb")
     elif algorithm == "bz2":
@@ -116,16 +118,16 @@ def backup_redis(container: Container) -> str:
 
 
 SYSTEM_DATABASES_POSTGRES = frozenset({"postgres", "template0", "template1"})
-SYSTEM_DATABASES_MYSQL = frozenset({"information_schema", "mysql", "performance_schema", "sys"})
+SYSTEM_DATABASES_MYSQL = frozenset(
+    {"information_schema", "mysql", "performance_schema", "sys"}
+)
 
 
 def backup_psql_single(container: Container) -> list[tuple[str, str, bool]]:
     env = get_container_env(container)
     user = env.get("POSTGRES_USER", "postgres")
 
-    exit_code, output = container.exec_run(
-        f"psql -U {user} -l -t -A", demux=True
-    )
+    exit_code, output = container.exec_run(f"psql -U {user} -l -t -A", demux=True)
     if exit_code != 0:
         raise RuntimeError(f"Failed to list databases for {container.name}: {output}")
 

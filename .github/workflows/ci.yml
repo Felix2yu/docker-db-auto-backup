@@ -6,9 +6,9 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: "3.14"
     - name: Install Python dependencies
@@ -19,9 +19,9 @@ jobs:
   e2e-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: "3.14"
     - name: Install Python dependencies
@@ -30,41 +30,3 @@ jobs:
       run: docker compose build && docker compose pull
     - name: Run test
       run: ./scripts/test.sh
-
-  build-deploy:
-    runs-on: ubuntu-latest
-    needs:
-      - lint
-      - e2e-test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Login to DockerHub
-        if: ${{ github.ref == 'refs/heads/master' }}
-        uses: docker/login-action@v3
-        with:
-          username: theorangeone
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        if: ${{ github.ref == 'refs/heads/master' }}
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push containers
-        uses: docker/build-push-action@v5
-        with:
-          push: ${{ github.ref == 'refs/heads/master' }}
-          platforms: linux/arm,linux/amd64,linux/arm64/v8
-          tags: |
-            ghcr.io/realorangeone/db-auto-backup:latest
-            theorangeone/db-auto-backup:latest
