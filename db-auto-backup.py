@@ -86,6 +86,11 @@ def get_compressed_file_extension(algorithm: str) -> str:
     raise ValueError(f"Unknown compression method {algorithm}")
 
 
+def _set_ownership(path: Path) -> None:
+    if BACKUP_PUID != 0 or BACKUP_PGID != 0:
+        os.chown(path, BACKUP_PUID, BACKUP_PGID)
+
+
 def backup_psql(container: Container) -> str:
     env = get_container_env(container)
     user = env.get("POSTGRES_USER", "postgres")
@@ -241,6 +246,8 @@ SINGLE_DB_MODE = os.environ.get("SINGLE_DB_MODE", "").lower() in ("true", "1", "
 APPRISE_URLS = os.environ.get("APPRISE_URLS", "")
 HEALTHCHECKS_URL = os.environ.get("HEALTHCHECKS_URL", "")
 BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0"))
+BACKUP_PUID = int(os.environ.get("PUID", "0"))
+BACKUP_PGID = int(os.environ.get("PGID", "0"))
 
 
 def get_backup_provider(container_names: Iterable[str]) -> Optional[BackupProvider]:
@@ -278,6 +285,8 @@ def backup(now: datetime) -> None:
     backup_base = BACKUP_DIR / date_dir
 
     print(f"Found {len(containers)} containers. Backing up to {backup_base}")
+    backup_base.mkdir(parents=True, exist_ok=True)
+    _set_ownership(backup_base)
 
     hc_url = HEALTHCHECKS_URL.rstrip("/")
     if hc_url:
@@ -308,6 +317,7 @@ def backup(now: datetime) -> None:
                         else:
                             db_dir = backup_base / container.name
                         db_dir.mkdir(parents=True, exist_ok=True)
+                        _set_ownership(db_dir)
 
                         backup_file = (
                             db_dir
@@ -338,6 +348,7 @@ def backup(now: datetime) -> None:
                                     f.write(stdout)
 
                         os.replace(backup_temp_file_path, backup_file)
+                        _set_ownership(backup_file)
 
                         if not SHOW_PROGRESS:
                             print(description)
@@ -372,6 +383,7 @@ def backup(now: datetime) -> None:
                             f.write(stdout)
 
                 os.replace(backup_temp_file_path, backup_file)
+                _set_ownership(backup_file)
 
                 if not SHOW_PROGRESS:
                     print(description)
