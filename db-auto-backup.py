@@ -462,16 +462,11 @@ def _hc_ping(url: str, data: str = "") -> None:
 
 def _format_tree(containers: list[tuple[str, Optional[list[str]]]]) -> str:
     lines = []
-    for i, (name, dbs) in enumerate(containers):
-        is_last = i == len(containers) - 1
-        prefix = "    " if is_last else "│   "
-        connector = "└── " if is_last else "├── "
-        lines.append(f"{connector}{name}")
+    for name, dbs in containers:
+        lines.append(f"  {name}")
         if dbs is not None:
-            for j, db in enumerate(dbs):
-                is_last_db = j == len(dbs) - 1
-                db_connector = "└── " if is_last_db else "├── "
-                lines.append(f"{prefix}{db_connector}{db}")
+            for db in dbs:
+                lines.append(f"    {db}")
     return "\n".join(lines)
 
 
