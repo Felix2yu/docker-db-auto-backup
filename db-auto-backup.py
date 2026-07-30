@@ -399,13 +399,7 @@ def backup(now: datetime) -> None:
                     apobj.add(url)
 
             if apobj.urls:
-                container_lines = []
-                for name, dbs in backed_up_containers:
-                    container_lines.append(f"  - {name}")
-                    if dbs is not None:
-                        for db in dbs:
-                            container_lines.append(f"      - {db}")
-                container_list = "\n".join(container_lines)
+                container_list = _format_tree(backed_up_containers)
                 apobj.notify(
                     title="数据库备份完成",
                     body=(
@@ -429,13 +423,7 @@ def backup(now: datetime) -> None:
                     print(f"Cleaned up old backup: {entry.name}")
 
         if hc_url:
-            container_lines = []
-            for name, dbs in backed_up_containers:
-                container_lines.append(f"  - {name}")
-                if dbs is not None:
-                    for db in dbs:
-                        container_lines.append(f"      - {db}")
-            container_list = "\n".join(container_lines)
+            container_list = _format_tree(backed_up_containers)
             _hc_ping(
                 hc_url,
                 data=f"成功备份 {len(backed_up_containers)} 个容器，耗时 {duration_str}。\n\n已备份容器:\n{container_list}",
@@ -458,6 +446,21 @@ def _hc_ping(url: str, data: str = "") -> None:
             urllib.request.urlopen(url, timeout=10)
     except Exception as e:
         print(f"Healthchecks ping failed ({url}): {e}")
+
+
+def _format_tree(containers: list[tuple[str, Optional[list[str]]]]) -> str:
+    lines = []
+    for i, (name, dbs) in enumerate(containers):
+        is_last = i == len(containers) - 1
+        prefix = "    " if is_last else "│   "
+        connector = "└── " if is_last else "├── "
+        lines.append(f"{connector}{name}")
+        if dbs is not None:
+            for j, db in enumerate(dbs):
+                is_last_db = j == len(dbs) - 1
+                db_connector = "└── " if is_last_db else "├── "
+                lines.append(f"{prefix}{db_connector}{db}")
+    return "\n".join(lines)
 
 
 def run_scheduled() -> None:
