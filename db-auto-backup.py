@@ -7,6 +7,7 @@ import os
 import secrets
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import IO, Callable, Dict, Iterable, Optional
 
 import docker
-import pycron
+from croniter import croniter
 from docker.models.containers import Container
 from dotenv import dotenv_values
 from tqdm.auto import tqdm
@@ -265,7 +266,6 @@ def get_container_names(container: Container) -> Iterable[str]:
     return names
 
 
-@pycron.cron(SCHEDULE)
 def backup(now: datetime) -> None:
     print("Starting backup...")
 
@@ -460,9 +460,23 @@ def _hc_ping(url: str, data: str = "") -> None:
         print(f"Healthchecks ping failed ({url}): {e}")
 
 
+def run_scheduled() -> None:
+    while True:
+        now = datetime.now()
+        try:
+            next_run = croniter(SCHEDULE, now).get_next(datetime)
+        except (ValueError, KeyError):
+            print(f"Invalid schedule: {SCHEDULE}")
+            return
+        sleep_seconds = (next_run - now).total_seconds()
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+        backup(datetime.now())
+
+
 if __name__ == "__main__":
     if os.environ.get("SCHEDULE"):
         print(f"Running backup with schedule '{SCHEDULE}'.")
-        pycron.start()
+        run_scheduled()
     else:
         backup(datetime.now())
