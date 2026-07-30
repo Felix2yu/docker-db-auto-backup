@@ -300,7 +300,9 @@ def backup(now: datetime) -> None:
                         "falling back to default"
                     )
                 else:
+                    backed_up_dbs = []
                     for db_name, db_command, is_system in db_list:
+                        backed_up_dbs.append(db_name)
                         if is_system:
                             db_dir = backup_base / container.name / "system"
                         else:
@@ -340,6 +342,7 @@ def backup(now: datetime) -> None:
                         if not SHOW_PROGRESS:
                             print(description)
 
+                    backed_up_containers.append((container.name, backed_up_dbs))
                     backed_up = True
 
             if not backed_up:
@@ -373,11 +376,17 @@ def backup(now: datetime) -> None:
                 if not SHOW_PROGRESS:
                     print(description)
 
-            backed_up_containers.append(container.name)
+                backed_up_containers.append((container.name, None))
 
         duration = (datetime.now() - now).total_seconds()
+        if duration >= 60:
+            minutes = int(duration / 60)
+            seconds = int(duration % 60)
+            duration_str = f"{minutes} 分钟 {seconds} 秒"
+        else:
+            duration_str = f"{duration:.2f} 秒"
         print(
-            f"Backup of {len(backed_up_containers)} containers complete in {duration:.2f} seconds."
+            f"Backup of {len(backed_up_containers)} containers complete in {duration_str}."
         )
 
         if APPRISE_URLS:
@@ -390,14 +399,18 @@ def backup(now: datetime) -> None:
                     apobj.add(url)
 
             if apobj.urls:
-                container_list = "\n".join(
-                    f"  - {name}" for name in backed_up_containers
-                )
+                container_lines = []
+                for name, dbs in backed_up_containers:
+                    container_lines.append(f"  - {name}")
+                    if dbs is not None:
+                        for db in dbs:
+                            container_lines.append(f"      - {db}")
+                container_list = "\n".join(container_lines)
                 apobj.notify(
                     title="数据库备份完成",
                     body=(
                         f"成功备份 {len(backed_up_containers)} 个容器，"
-                        f"耗时 {duration:.2f} 秒。\n\n"
+                        f"耗时 {duration_str}。\n\n"
                         f"已备份容器:\n{container_list}"
                     ),
                 )
@@ -416,10 +429,16 @@ def backup(now: datetime) -> None:
                     print(f"Cleaned up old backup: {entry.name}")
 
         if hc_url:
-            container_list = "\n".join(f"  - {name}" for name in backed_up_containers)
+            container_lines = []
+            for name, dbs in backed_up_containers:
+                container_lines.append(f"  - {name}")
+                if dbs is not None:
+                    for db in dbs:
+                        container_lines.append(f"      - {db}")
+            container_list = "\n".join(container_lines)
             _hc_ping(
                 hc_url,
-                data=f"成功备份 {len(backed_up_containers)} 个容器，耗时 {duration:.2f} 秒。\n\n已备份容器:\n{container_list}",
+                data=f"成功备份 {len(backed_up_containers)} 个容器，耗时 {duration_str}。\n\n已备份容器:\n{container_list}",
             )
 
     except Exception:
