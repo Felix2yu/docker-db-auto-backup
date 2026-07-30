@@ -25,6 +25,12 @@ def normalize_container_name(container_name: str) -> str:
     return container_name.replace("_", "-")
 
 
+def get_backup_dir() -> Path:
+    dirs = list(BACKUP_DIR.iterdir())
+    assert len(dirs) == 1
+    return dirs[0]
+
+
 # HACK: The filename isn't compatible with `import foo` syntax
 db_auto_backup = import_file(Path.cwd() / "db-auto-backup.py")
 
@@ -33,13 +39,14 @@ def test_backup_runs(run_backup: Callable) -> None:
     exit_code, out = run_backup({})
     assert exit_code == 0, out
     assert BACKUP_DIR.is_dir()
-    assert sorted(normalize_container_name(f.name) for f in BACKUP_DIR.iterdir()) == [
+    backup_dir = get_backup_dir()
+    assert sorted(normalize_container_name(f.name) for f in backup_dir.iterdir()) == [
         "docker-db-auto-backup-mariadb-1.sql",
         "docker-db-auto-backup-mysql-1.sql",
         "docker-db-auto-backup-psql-1.sql",
         "docker-db-auto-backup-redis-1.rdb",
     ]
-    for backup_file in BACKUP_DIR.iterdir():
+    for backup_file in backup_dir.iterdir():
         assert backup_file.stat().st_size > 50
         assert (backup_file.stat().st_mode & 0o777) == 0o600
 
@@ -54,13 +61,14 @@ def test_backup_runs_compressed(
     exit_code, out = run_backup({"COMPRESSION": algorithm})
     assert exit_code == 0, out
     assert BACKUP_DIR.is_dir()
-    assert sorted(normalize_container_name(f.name) for f in BACKUP_DIR.iterdir()) == [
+    backup_dir = get_backup_dir()
+    assert sorted(normalize_container_name(f.name) for f in backup_dir.iterdir()) == [
         f"docker-db-auto-backup-mariadb-1.sql{extension}",
         f"docker-db-auto-backup-mysql-1.sql{extension}",
         f"docker-db-auto-backup-psql-1.sql{extension}",
         f"docker-db-auto-backup-redis-1.rdb{extension}",
     ]
-    for backup_file in BACKUP_DIR.iterdir():
+    for backup_file in backup_dir.iterdir():
         assert (backup_file.stat().st_mode & 0o777) == 0o600
 
 

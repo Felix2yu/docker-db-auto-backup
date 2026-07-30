@@ -279,7 +279,7 @@ def backup(now: datetime) -> None:
     docker_client = docker.from_env()
     containers = docker_client.containers.list()
 
-    backed_up_containers = []
+    backed_up_containers: list[tuple[str, Optional[list[str]]]] = []
 
     date_dir = now.strftime("%Y-%m-%d")
     backup_base = BACKUP_DIR / date_dir
@@ -353,7 +353,7 @@ def backup(now: datetime) -> None:
                         if not SHOW_PROGRESS:
                             print(description)
 
-                    backed_up_containers.append((container.name, backed_up_dbs))
+                    backed_up_containers.append((str(container.name), backed_up_dbs))
                     backed_up = True
 
             if not backed_up:
@@ -388,7 +388,7 @@ def backup(now: datetime) -> None:
                 if not SHOW_PROGRESS:
                     print(description)
 
-                backed_up_containers.append((container.name, None))
+                backed_up_containers.append((str(container.name), None))
 
         duration = (datetime.now() - now).total_seconds()
         if duration >= 60:
@@ -410,7 +410,7 @@ def backup(now: datetime) -> None:
                 if url:
                     apobj.add(url)
 
-            if apobj.urls:
+            if apobj:
                 container_list = _format_tree(backed_up_containers)
                 apobj.notify(
                     title="数据库备份完成",
