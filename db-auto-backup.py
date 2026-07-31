@@ -121,7 +121,7 @@ def backup_redis(container: Container) -> str:
     Note: `SAVE` command locks the database, which isn't ideal.
     Hopefully the commit is fast enough!
     """
-    return "sh -c 'redis-cli SAVE > /dev/null && cat /data/dump.rdb'"
+    return "sh -c 'redis-cli SAVE > /dev/null 2>&1 || valkey-cli SAVE > /dev/null 2>&1 && cat /data/dump.rdb'"
 
 
 SYSTEM_DATABASES_POSTGRES = frozenset({"postgres", "template0", "template1"})
@@ -230,7 +230,7 @@ BACKUP_PROVIDERS: list[BackupProvider] = [
     ),
     BackupProvider(
         name="redis",
-        patterns=["redis"],
+        patterns=["redis", "valkey", "valkey*"],
         backup_method=backup_redis,
         file_extension="rdb",
         single_db_method=None,
