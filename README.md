@@ -58,6 +58,13 @@ environment:
   - APPRISE_URLS=slack://token-a/token-b/token-c,mailto://user:pass@gmail.com
 ```
 
+通知正文以 Markdown 格式发送。支持 Markdown 的渠道（如 Slack、Discord、Google Chat 等）会自动渲染嵌套列表，清晰展示每个容器下备份的子库明细。部分渠道默认按纯文本处理（例如 ntfy），可在 URL 后追加 `?format=markdown` 启用 Markdown 渲染：
+
+```yml
+environment:
+  - APPRISE_URLS="ntfy://ntfy.example.com/mytopic?format=markdown"
+```
+
 Apprise 支持 100+ 通知渠道，URL 格式见 [Apprise Wiki](https://github.com/caronc/apprise/wiki)。
 
 ### 压缩

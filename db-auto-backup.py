@@ -279,7 +279,7 @@ def backup(now: datetime) -> None:
     docker_client = docker.from_env()
     containers = docker_client.containers.list()
 
-    backed_up_containers: list[tuple[str, Optional[list[str]]]] = []
+    backed_up_containers: list[tuple[str, Optional[list[tuple[str, bool]]]]] = []
 
     date_dir = now.strftime("%Y-%m-%d")
     backup_base = BACKUP_DIR / date_dir
@@ -311,7 +311,7 @@ def backup(now: datetime) -> None:
                 else:
                     backed_up_dbs = []
                     for db_name, db_command, is_system in db_list:
-                        backed_up_dbs.append(db_name)
+                        backed_up_dbs.append((db_name, is_system))
                         if is_system:
                             db_dir = backup_base / container.name / "system"
                         else:
@@ -419,6 +419,7 @@ def backup(now: datetime) -> None:
                         f"耗时 {duration_str}。\n\n"
                         f"已备份容器:\n{container_list}"
                     ),
+                    body_format=apprise.NotifyFormat.MARKDOWN,
                 )
 
         if BACKUP_RETENTION_DAYS > 0:
@@ -460,13 +461,18 @@ def _hc_ping(url: str, data: str = "") -> None:
         print(f"Healthchecks ping failed ({url}): {e}")
 
 
-def _format_tree(containers: list[tuple[str, Optional[list[str]]]]) -> str:
+def _format_tree(
+    containers: list[tuple[str, Optional[list[tuple[str, bool]]]]],
+) -> str:
     lines = []
     for name, dbs in containers:
-        lines.append(f"  {name}")
+        lines.append(f"- {name}")
         if dbs is not None:
-            for db in dbs:
-                lines.append(f"    {db}")
+            for db, is_system in dbs:
+                if is_system:
+                    lines.append(f"    - {db}（系统库）")
+                else:
+                    lines.append(f"    - {db}")
     return "\n".join(lines)
 
 
