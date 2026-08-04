@@ -470,7 +470,7 @@ def _format_tree(
         if dbs is not None:
             for db, is_system in dbs:
                 if is_system:
-                    lines.append(f"    - {db}（系统库）")
+                    lines.append(f"    - *{db}*")
                 else:
                     lines.append(f"    - {db}")
     return "\n".join(lines)
