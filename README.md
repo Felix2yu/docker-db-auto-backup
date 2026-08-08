@@ -1,12 +1,12 @@
 # docker-db-auto-backup
 
-自动备份 Docker 宿主上所有运行中的数据库容器，支持可选的压缩功能。
+自动备份 Docker 宿主上所有运行中的数据库容器，支持可选的压缩功能。用 Go 编写，单静态二进制。
 
 ## 支持的数据库
 
 - MySQL / MariaDB（包括 linuxserver/mariadb）
 - PostgreSQL（包括 TimescaleDB、pgvecto.rs、pgvector、Nextcloud AIO、pgautoupgrade、Immich Postgres VectorChord、PostGIS 等）
-- Redis
+- Redis / Valkey
 
 ## 安装
 
@@ -14,7 +14,7 @@
 
 将备份目录挂载到 `/var/backups`（或通过 `$BACKUP_DIR` 覆盖）。备份文件按 `{日期}/{容器名}` 组织。
 
-备份默认在每天凌晨运行。修改 `$SCHEDULE` 可自定义 cron 调度表达式，格式参考 [croniter 文档](https://pypi.org/project/croniter/)。
+备份默认在每天凌晨运行。修改 `$SCHEDULE` 可自定义 cron 调度表达式（标准 5 段 cron，例如 `0 0 * * *`）。
 
 ### 环境变量
 
@@ -25,8 +25,9 @@
 | `SCHEDULE` | `0 0 * * *` | cron 调度表达式（设为空字符串则立即执行一次） |
 | `COMPRESSION` | `plain` | 压缩算法：`gzip` / `lzma` / `xz` / `bz2` / `plain` |
 | `SINGLE_DB_MODE` | `false` | 设为 `true` 时每个数据库单独备份为一个文件，用户数据与系统库分离 |
-| `APPRISE_URLS` | `-` | 逗号分隔的 [Apprise](https://github.com/caronc/apprise) 通知 URL 列表，备份完成后发送通知 |
-| `HEALTHCHECKS_URL` | `-` | [Healthchecks](https://healthchecks.io/) Ping URL（完整地址，如 `https://hc-ping.com/<uuid>` 或自建 `https://hc.example.com/ping/<uuid>`），脚本会自动附加 `/start`、`/fail` 等后缀 |
+| `SHOUTRRR_URLS` | `-` | 逗号分隔的 [Shoutrrr](https://github.com/containrrr/shoutrrr) 通知 URL 列表，备份完成后发送通知 |
+| `HEALTHCHECKS_URL` | `-` | [Healthchecks](https://healthchecks.io/) Ping URL（完整地址，如 `https://hc-ping.com/<uuid>` 或自建 `https://hc.example.com/ping/<uuid>`），程序会自动附加 `/start`、`/fail` 等后缀 |
+| `SHOW_PROGRESS` | 自动 | 备份时显示进度条（默认在 TTY 中启用） |
 
 ### 单库备份模式（SINGLE_DB_MODE）
 
@@ -47,25 +48,20 @@
 | PostgreSQL | `postgres`, `template0`, `template1` |
 | MySQL / MariaDB | `information_schema`, `mysql`, `performance_schema`, `sys` |
 
-### 通知（Apprise）
+### 通知（Shoutrrr）
 
-备份完成后可通过 [Apprise](https://github.com/caronc/apprise) 发送通知到多种渠道，如 Slack、Discord、Telegram、邮件、Pushover 等。
+备份完成后可通过 [Shoutrrr](https://github.com/containrrr/shoutrrr) 发送通知到多种渠道，如 Slack、Discord、Telegram、邮件、ntfy 等。
 
-`APPRISE_URLS` 为逗号分隔的 Apprise URL 列表，例如：
-
-```yml
-environment:
-  - APPRISE_URLS=slack://token-a/token-b/token-c,mailto://user:pass@gmail.com
-```
-
-通知正文以 Markdown 格式发送。支持 Markdown 的渠道（如 Slack、Discord、Google Chat 等）会自动渲染嵌套列表，清晰展示每个容器下备份的子库明细。部分渠道默认按纯文本处理（例如 ntfy），可在 URL 后追加 `?format=markdown` 启用 Markdown 渲染：
+`SHOUTRRR_URLS` 为逗号分隔的 Shoutrrr URL 列表，例如：
 
 ```yml
 environment:
-  - APPRISE_URLS="ntfy://ntfy.example.com/mytopic?format=markdown"
+  - SHOUTRRR_URLS=slack://token-a/token-b/token-c
 ```
 
-Apprise 支持 100+ 通知渠道，URL 格式见 [Apprise Wiki](https://github.com/caronc/apprise/wiki)。
+通知正文以 Markdown 格式发送。支持 Markdown 的渠道（如 Slack、Discord、Telegram 等）会自动渲染嵌套列表，清晰展示每个容器下备份的子库明细。
+
+Shoutrrr 支持多种通知渠道，URL 格式见 [Shoutrrr 文档](https://containrrr.dev/shoutrrr/)。
 
 ### 压缩
 
@@ -81,13 +77,13 @@ Apprise 支持 100+ 通知渠道，URL 格式见 [Apprise Wiki](https://github.c
 ```yml
 services:
   backup:
-    image: ghcr.io/realorangeone/db-auto-backup:latest
+    build: .
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./backups:/var/backups
     environment:
-      - APPRISE_URLS=slack://token-a/token-b/token-c
+      - SHOUTRRR_URLS=slack://token-a/token-b/token-c
       - SINGLE_DB_MODE=true
 ```
 
@@ -98,4 +94,17 @@ services:
 ```yml
 environment:
   - SCHEDULE=
+```
+
+## 开发与测试
+
+```bash
+go build -o db-auto-backup .
+go test ./...
+```
+
+E2E 测试需要通过 Docker 运行（会启动 postgres / mariadb / mysql / redis 四个容器并执行真实备份）：
+
+```bash
+./scripts/test.sh
 ```

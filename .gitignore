@@ -8,6 +8,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Go binaries
+/db-auto-backup
+/auto-backup
+
 # C extensions
 *.so
 

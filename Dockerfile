@@ -1,19 +1,20 @@
-FROM python:3.14-slim
+FROM golang:1.26-alpine AS build
 
-ENV SCHEDULE="0 0 * * *" TZ=Asia/Shanghai PYTHONUNBUFFERED=1
+WORKDIR /src
 
-WORKDIR /usr/src/db-auto-backup
-RUN mkdir -p /var/backups
+COPY go.mod go.sum ./
+RUN go mod download
 
-COPY requirements.txt .
-RUN apt-get update -qq \
- && apt-get install --no-install-recommends -y git tzdata \
- && pip install --no-cache-dir -r requirements.txt \
- && apt-get purge -y git \
- && apt-get autoremove -y \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/* /root/.cache
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/db-auto-backup .
 
-COPY db-auto-backup.py .
+FROM alpine:3.21
 
-CMD ["python3", "./db-auto-backup.py"]
+ENV SCHEDULE="0 0 * * *" TZ=Asia/Shanghai
+
+RUN apk add --no-cache tzdata ca-certificates \
+ && mkdir -p /var/backups
+
+COPY --from=build /out/db-auto-backup /usr/local/bin/db-auto-backup
+
+CMD ["db-auto-backup"]

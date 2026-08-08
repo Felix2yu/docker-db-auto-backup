@@ -3,14 +3,13 @@ services:
     build:
       context: .
     restart: unless-stopped
-    command: "sleep infinity"
+    command: ["tail", "-f", "/dev/null"]
     container_name: docker-db-auto-backup
     environment:
       - TZ=Asia/Shanghai
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - ./backups:/var/backups
-      - ./db-auto-backup.py:/usr/src/db-auto-backup/db-auto-backup.py:ro
     depends_on:
       - psql
       - mariadb

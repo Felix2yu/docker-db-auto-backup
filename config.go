@@ -1,0 +1,78 @@
+package main
+
+import (
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+
+	"golang.org/x/term"
+)
+
+type config struct {
+	backupDir       string
+	schedule        string
+	compression     string
+	singleDBMode    bool
+	shoutrrrURLs    []string
+	healthchecksURL string
+	retentionDays   int
+	workers         int
+	puid            int
+	pgid            int
+	showProgress    bool
+}
+
+func loadConfig() *config {
+	return &config{
+		backupDir:       envOr("BACKUP_DIR", "/var/backups"),
+		schedule:        os.Getenv("SCHEDULE"),
+		compression:     strings.ToLower(envOr("COMPRESSION", "plain")),
+		singleDBMode:    envIsTrue("SINGLE_DB_MODE"),
+		shoutrrrURLs:    splitTrim(os.Getenv("SHOUTRRR_URLS")),
+		healthchecksURL: os.Getenv("HEALTHCHECKS_URL"),
+		retentionDays:   envInt("BACKUP_RETENTION_DAYS", 0),
+		workers:         envInt("BACKUP_WORKERS", runtime.NumCPU()),
+		puid:            envInt("PUID", 0),
+		pgid:            envInt("PGID", 0),
+		showProgress:    term.IsTerminal(int(os.Stdout.Fd())),
+	}
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func envIsTrue(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "true", "1", "yes":
+		return true
+	}
+	return false
+}
+
+func envInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func splitTrim(value string) []string {
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
