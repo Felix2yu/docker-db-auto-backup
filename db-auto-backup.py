@@ -8,6 +8,7 @@ import secrets
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
@@ -32,14 +33,30 @@ class BackupProvider:
     )
 
 
+_CONTAINER_ENV_CACHE: Dict[str, Dict[str, Optional[str]]] = {}
+_CONTAINER_BINARY_CACHE: Dict[tuple[str, str], bool] = {}
+_CONTAINER_NAMES_CACHE: Dict[str, frozenset[str]] = {}
+
+
+def _clear_container_caches() -> None:
+    _CONTAINER_ENV_CACHE.clear()
+    _CONTAINER_BINARY_CACHE.clear()
+    _CONTAINER_NAMES_CACHE.clear()
+
+
 def get_container_env(container: Container) -> Dict[str, Optional[str]]:
     """
     Get all environment variables from a container.
 
     Variables at runtime, rather than those defined in the container.
     """
+    if container.id in _CONTAINER_ENV_CACHE:
+        return _CONTAINER_ENV_CACHE[container.id]
+
     _, (env_output, _) = container.exec_run("env", demux=True)
-    return dict(dotenv_values(stream=StringIO(env_output.decode())))
+    env = dict(dotenv_values(stream=StringIO(env_output.decode())))
+    _CONTAINER_ENV_CACHE[container.id] = env
+    return env
 
 
 def binary_exists_in_container(container: Container, binary_name: str) -> bool:
@@ -48,8 +65,14 @@ def binary_exists_in_container(container: Container, binary_name: str) -> bool:
 
     Variables at runtime, rather than those defined in the container.
     """
+    cache_key = (container.id, binary_name)
+    if cache_key in _CONTAINER_BINARY_CACHE:
+        return _CONTAINER_BINARY_CACHE[cache_key]
+
     exit_code, _ = container.exec_run(["which", binary_name])
-    return exit_code == 0
+    exists = exit_code == 0
+    _CONTAINER_BINARY_CACHE[cache_key] = exists
+    return exists
 
 
 def temp_backup_file_name() -> str:
@@ -71,7 +94,7 @@ def open_file_compressed(file_path: Path, algorithm: str) -> IO[bytes]:
         return bz2.open(file_path, mode="wb")
     elif algorithm == "plain":
         return file_path.open(mode="wb")
-    raise ValueError(f"Unknown compression method {algorithm}")
+    raise ValueError(f"未知的压缩方式 {algorithm}")
 
 
 def get_compressed_file_extension(algorithm: str) -> str:
@@ -83,7 +106,7 @@ def get_compressed_file_extension(algorithm: str) -> str:
         return ".bz2"
     elif algorithm == "plain":
         return ""
-    raise ValueError(f"Unknown compression method {algorithm}")
+    raise ValueError(f"未知的压缩方式 {algorithm}")
 
 
 def _set_ownership(path: Path) -> None:
@@ -106,7 +129,7 @@ def backup_mysql(container: Container) -> str:
     elif "MYSQL_ROOT_PASSWORD" in env:
         auth = "-p$MYSQL_ROOT_PASSWORD"
     else:
-        raise ValueError(f"Unable to find MySQL root password for {container.name}")
+        raise ValueError(f"无法为 {container.name} 找到 MySQL root 密码")
 
     if binary_exists_in_container(container, "mariadb-dump"):
         backup_binary = "mariadb-dump"
@@ -147,7 +170,7 @@ def backup_psql_single(container: Container) -> list[tuple[str, str, bool]]:
         demux=True,
     )
     if exit_code != 0:
-        raise RuntimeError(f"Failed to list databases for {container.name}: {output}")
+        raise RuntimeError(f"列出 {container.name} 的数据库失败: {output}")
 
     stdout, _ = output
     if stdout is None:
@@ -172,7 +195,7 @@ def backup_mysql_single(container: Container) -> list[tuple[str, str, bool]]:
     elif "MYSQL_ROOT_PASSWORD" in env:
         auth = "-p$MYSQL_ROOT_PASSWORD"
     else:
-        raise ValueError(f"Unable to find MySQL root password for {container.name}")
+        raise ValueError(f"无法为 {container.name} 找到 MySQL root 密码")
 
     if binary_exists_in_container(container, "mariadb-dump"):
         backup_binary = "mariadb-dump"
@@ -186,7 +209,7 @@ def backup_mysql_single(container: Container) -> list[tuple[str, str, bool]]:
         demux=True,
     )
     if exit_code != 0:
-        raise RuntimeError(f"Failed to list databases for {container.name}: {output}")
+        raise RuntimeError(f"列出 {container.name} 的数据库失败: {output}")
 
     stdout, _ = output
     if stdout is None:
@@ -246,6 +269,7 @@ SINGLE_DB_MODE = os.environ.get("SINGLE_DB_MODE", "").lower() in ("true", "1", "
 APPRISE_URLS = os.environ.get("APPRISE_URLS", "")
 HEALTHCHECKS_URL = os.environ.get("HEALTHCHECKS_URL", "")
 BACKUP_RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0"))
+BACKUP_WORKERS = int(os.environ.get("BACKUP_WORKERS", os.cpu_count() or 1))
 BACKUP_PUID = int(os.environ.get("PUID", "0"))
 BACKUP_PGID = int(os.environ.get("PGID", "0"))
 
@@ -260,6 +284,9 @@ def get_backup_provider(container_names: Iterable[str]) -> Optional[BackupProvid
 
 
 def get_container_names(container: Container) -> Iterable[str]:
+    if container.id in _CONTAINER_NAMES_CACHE:
+        return _CONTAINER_NAMES_CACHE[container.id]
+
     names = set()
     for tag in container.image.tags:
         registry, image = docker.auth.resolve_repository_name(tag)
@@ -270,103 +297,49 @@ def get_container_names(container: Container) -> Iterable[str]:
 
         image, tag_name = image.split(":", 1)
         names.add(image)
-    return names
+
+    names_set = frozenset(names)
+    _CONTAINER_NAMES_CACHE[container.id] = names_set
+    return names_set
 
 
-def backup(now: datetime) -> None:
-    print("Starting backup...")
+def _backup_container(
+    container: Container, backup_base: Path
+) -> Optional[tuple[str, Optional[list[tuple[str, bool]]]]]:
+    container_names = get_container_names(container)
+    backup_provider = get_backup_provider(container_names)
+    if backup_provider is None:
+        return None
 
-    docker_client = docker.from_env()
-    containers = docker_client.containers.list()
-
-    backed_up_containers: list[tuple[str, Optional[list[tuple[str, bool]]]]] = []
-
-    date_dir = now.strftime("%Y-%m-%d")
-    backup_base = BACKUP_DIR / date_dir
-
-    print(f"Found {len(containers)} containers. Backing up to {backup_base}")
-    backup_base.mkdir(parents=True, exist_ok=True)
-    _set_ownership(backup_base)
-
-    hc_url = HEALTHCHECKS_URL.rstrip("/")
-    if hc_url:
-        _hc_ping(f"{hc_url}/start")
-
-    try:
-        for container in containers:
-            container_names = get_container_names(container)
-            backup_provider = get_backup_provider(container_names)
-            if backup_provider is None:
-                continue
-
-            backed_up = False
-            if SINGLE_DB_MODE and backup_provider.single_db_method:
-                try:
-                    db_list = backup_provider.single_db_method(container)
-                except Exception as e:
-                    print(
-                        f"Warning: single-db mode failed for {container.name}: {e}, "
-                        "falling back to default"
-                    )
+    backed_up = False
+    backed_up_dbs: Optional[list[tuple[str, bool]]] = None
+    if SINGLE_DB_MODE and backup_provider.single_db_method:
+        try:
+            db_list = backup_provider.single_db_method(container)
+        except Exception as e:
+            print(
+                f"警告: 单数据库模式对 {container.name} 失败: {e}，" "将回退到默认模式"
+            )
+        else:
+            backed_up_dbs = []
+            for db_name, db_command, is_system in db_list:
+                backed_up_dbs.append((db_name, is_system))
+                if is_system:
+                    db_dir = backup_base / container.name / "system"
                 else:
-                    backed_up_dbs = []
-                    for db_name, db_command, is_system in db_list:
-                        backed_up_dbs.append((db_name, is_system))
-                        if is_system:
-                            db_dir = backup_base / container.name / "system"
-                        else:
-                            db_dir = backup_base / container.name
-                        db_dir.mkdir(parents=True, exist_ok=True)
-                        _set_ownership(db_dir)
+                    db_dir = backup_base / container.name
+                db_dir.mkdir(parents=True, exist_ok=True)
+                _set_ownership(db_dir)
 
-                        backup_file = (
-                            db_dir
-                            / f"{db_name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
-                        )
-                        backup_temp_file_path = db_dir / temp_backup_file_name()
-
-                        _, output = container.exec_run(
-                            db_command, stream=True, demux=True
-                        )
-
-                        description = (
-                            f"{container.name}/{db_name} ({backup_provider.name})"
-                        )
-
-                        with open_file_compressed(
-                            backup_temp_file_path, COMPRESSION
-                        ) as backup_temp_file:
-                            with tqdm.wrapattr(
-                                backup_temp_file,
-                                method="write",
-                                desc=description,
-                                disable=not SHOW_PROGRESS,
-                            ) as f:
-                                for stdout, _ in output:
-                                    if stdout is None:
-                                        continue
-                                    f.write(stdout)
-
-                        os.replace(backup_temp_file_path, backup_file)
-                        _set_ownership(backup_file)
-
-                        if not SHOW_PROGRESS:
-                            print(description)
-
-                    backed_up_containers.append((str(container.name), backed_up_dbs))
-                    backed_up = True
-
-            if not backed_up:
                 backup_file = (
-                    backup_base
-                    / f"{container.name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
+                    db_dir
+                    / f"{db_name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
                 )
-                backup_temp_file_path = backup_base / temp_backup_file_name()
+                backup_temp_file_path = db_dir / temp_backup_file_name()
 
-                backup_command = backup_provider.backup_method(container)
-                _, output = container.exec_run(backup_command, stream=True, demux=True)
+                _, output = container.exec_run(db_command, stream=True, demux=True)
 
-                description = f"{container.name} ({backup_provider.name})"
+                description = f"{container.name}/{db_name} ({backup_provider.name})"
 
                 with open_file_compressed(
                     backup_temp_file_path, COMPRESSION
@@ -388,7 +361,84 @@ def backup(now: datetime) -> None:
                 if not SHOW_PROGRESS:
                     print(description)
 
-                backed_up_containers.append((str(container.name), None))
+            backed_up = True
+
+    if not backed_up:
+        backup_file = (
+            backup_base
+            / f"{container.name}.{backup_provider.file_extension}{get_compressed_file_extension(COMPRESSION)}"
+        )
+        backup_temp_file_path = backup_base / temp_backup_file_name()
+
+        backup_command = backup_provider.backup_method(container)
+        _, output = container.exec_run(backup_command, stream=True, demux=True)
+
+        description = f"{container.name} ({backup_provider.name})"
+
+        with open_file_compressed(
+            backup_temp_file_path, COMPRESSION
+        ) as backup_temp_file:
+            with tqdm.wrapattr(
+                backup_temp_file,
+                method="write",
+                desc=description,
+                disable=not SHOW_PROGRESS,
+            ) as f:
+                for stdout, _ in output:
+                    if stdout is None:
+                        continue
+                    f.write(stdout)
+
+        os.replace(backup_temp_file_path, backup_file)
+        _set_ownership(backup_file)
+
+        if not SHOW_PROGRESS:
+            print(description)
+
+        backed_up_dbs = None
+
+    return (str(container.name), backed_up_dbs)
+
+
+def backup(now: datetime) -> None:
+    print("开始备份...")
+
+    _clear_container_caches()
+    docker_client = docker.from_env()
+    containers = docker_client.containers.list()
+
+    backed_up_containers: list[tuple[str, Optional[list[tuple[str, bool]]]]] = []
+
+    date_dir = now.strftime("%Y-%m-%d")
+    backup_base = BACKUP_DIR / date_dir
+
+    print(f"发现 {len(containers)} 个容器，正在备份到 {backup_base}")
+    backup_base.mkdir(parents=True, exist_ok=True)
+    _set_ownership(backup_base)
+
+    hc_url = HEALTHCHECKS_URL.rstrip("/")
+    if hc_url:
+        _hc_ping(f"{hc_url}/start")
+
+    try:
+        workers = max(1, min(BACKUP_WORKERS, len(containers)))
+        errors: list[Exception] = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(_backup_container, container, backup_base)
+                for container in containers
+            ]
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                except Exception as e:
+                    errors.append(e)
+                    continue
+                if result is not None:
+                    backed_up_containers.append(result)
+
+        if errors:
+            raise RuntimeError(f"{len(errors)} 个容器备份失败: {errors[0]}")
 
         duration = (datetime.now() - now).total_seconds()
         if duration >= 60:
@@ -397,9 +447,7 @@ def backup(now: datetime) -> None:
             duration_str = f"{minutes} 分钟 {seconds} 秒"
         else:
             duration_str = f"{duration:.2f} 秒"
-        print(
-            f"Backup of {len(backed_up_containers)} containers complete in {duration_str}."
-        )
+        print(f"成功备份 {len(backed_up_containers)} 个容器，耗时 {duration_str}。")
 
         if APPRISE_URLS:
             import apprise
@@ -433,7 +481,7 @@ def backup(now: datetime) -> None:
                     continue
                 if dir_date < cutoff:
                     shutil.rmtree(entry, ignore_errors=True)
-                    print(f"Cleaned up old backup: {entry.name}")
+                    print(f"已清理旧备份: {entry.name}")
 
         if hc_url:
             container_list = _format_tree(backed_up_containers)
@@ -458,7 +506,7 @@ def _hc_ping(url: str, data: str = "") -> None:
         else:
             urllib.request.urlopen(url, timeout=10)
     except Exception as e:
-        print(f"Healthchecks ping failed ({url}): {e}")
+        print(f"Healthchecks 心跳失败 ({url}): {e}")
 
 
 def _format_tree(
@@ -482,7 +530,7 @@ def run_scheduled() -> None:
         try:
             next_run = croniter(SCHEDULE, now).get_next(datetime)
         except (ValueError, KeyError):
-            print(f"Invalid schedule: {SCHEDULE}")
+            print(f"无效的备份计划: {SCHEDULE}")
             return
         sleep_seconds = (next_run - now).total_seconds()
         if sleep_seconds > 0:
@@ -492,7 +540,7 @@ def run_scheduled() -> None:
 
 if __name__ == "__main__":
     if os.environ.get("SCHEDULE"):
-        print(f"Running backup with schedule '{SCHEDULE}'.")
+        print(f"正在按计划 '{SCHEDULE}' 运行备份。")
         run_scheduled()
     else:
         backup(datetime.now())
