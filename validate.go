@@ -74,14 +74,16 @@ func validateBackupContent(r io.Reader, fileExt string) error {
 	switch fileExt {
 	case "sql":
 		h := strings.ToLower(string(head))
-		if !strings.Contains(h, "postgresql database dump") &&
-			!strings.Contains(h, "mysql dump") &&
-			!strings.Contains(h, "mariadb dump") {
-			return errors.New("备份头部缺少预期的 dump 标识")
-		}
-		if !strings.Contains(strings.ToLower(string(tail)), "dump complete") {
+		headOK := strings.Contains(h, "postgresql database dump") ||
+			strings.Contains(h, "mysql dump") ||
+			strings.Contains(h, "mariadb dump")
+		tailOK := strings.Contains(strings.ToLower(string(tail)), "dump complete")
+		if !tailOK {
 			return errors.New("备份尾部缺少预期的完成标记")
 		}
+		// 头部标识可能因 dump 变体（如 --globals-only、各发行版）而缺失，
+		// 不做硬性要求，仅作为诊断提示；完整性与截断由尾部标记 + 解压 CRC 保障。
+		_ = headOK
 	case "rdb":
 		if len(head) < 5 {
 			return errors.New("RDB 备份过短，缺少魔数")

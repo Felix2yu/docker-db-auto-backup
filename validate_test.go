@@ -30,6 +30,31 @@ func TestValidateBackupContentMariaDB(t *testing.T) {
 	}
 }
 
+func TestValidateBackupContentSQLVariants(t *testing.T) {
+	cases := map[string]struct {
+		content string
+		ext     string
+	}{
+		"globals 变体无头部标识": {
+			"-- Global objects\nCREATE ROLE app;\nALTER ROLE app WITH LOGIN;\n-- PostgreSQL database cluster dump complete\n",
+			"sql",
+		},
+		"pg_dumpall 全库": {
+			"--\n-- PostgreSQL database cluster dump\n--\nCREATE TABLE x (id int);\n--\n-- PostgreSQL database cluster dump complete\n--\n",
+			"sql",
+		},
+		"仅尾完成标记": {
+			"\x01SET client_encoding = 'UTF8';\nCREATE ROLE r;\n-- dump complete\n",
+			"sql",
+		},
+	}
+	for name, c := range cases {
+		if err := validateBackupContent(strings.NewReader(c.content), c.ext); err != nil {
+			t.Errorf("%s: expected ok, got %v", name, err)
+		}
+	}
+}
+
 func TestValidateBackupRDB(t *testing.T) {
 	if err := validateBackupContent(strings.NewReader("REDIS0015...."), "rdb"); err != nil {
 		t.Errorf("valid redis rdb rejected: %v", err)
