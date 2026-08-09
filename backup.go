@@ -10,10 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
 	"github.com/schollz/progressbar/v3"
-
-	"github.com/docker/docker/pkg/stdcopy"
 )
 
 type backupResult struct {
@@ -71,7 +70,7 @@ func backup(ctx context.Context, cfg *config, runAt time.Time) error {
 	for _, c := range containers {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(c types.Container) {
+		go func(c container.Summary) {
 			defer func() {
 				<-sem
 				wg.Done()
@@ -149,7 +148,7 @@ func backup(ctx context.Context, cfg *config, runAt time.Time) error {
 	return nil
 }
 
-func backupContainer(ctx context.Context, cfg *config, dc *dockerClient, c types.Container, backupBase string) (*backupResult, error) {
+func backupContainer(ctx context.Context, cfg *config, dc *dockerClient, c container.Summary, backupBase string) (*backupResult, error) {
 	containerNames, err := dc.containerImageNames(ctx, c.ID)
 	if err != nil {
 		return nil, err
@@ -208,7 +207,7 @@ func backupContainer(ctx context.Context, cfg *config, dc *dockerClient, c types
 	return &backupResult{name: name, providerType: provider.name, dbs: dbs}, nil
 }
 
-func containerName(c types.Container) string {
+func containerName(c container.Summary) string {
 	if len(c.Names) > 0 {
 		return strings.TrimPrefix(c.Names[0], "/")
 	}

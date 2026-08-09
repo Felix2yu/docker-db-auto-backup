@@ -8,10 +8,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 type dockerClient struct {
@@ -35,8 +34,12 @@ func newDockerClient(ctx context.Context) (*dockerClient, error) {
 	}, nil
 }
 
-func (dc *dockerClient) listContainers(ctx context.Context) ([]types.Container, error) {
-	return dc.api.ContainerList(ctx, container.ListOptions{})
+func (dc *dockerClient) listContainers(ctx context.Context) ([]container.Summary, error) {
+	res, err := dc.api.ContainerList(ctx, client.ContainerListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return res.Items, nil
 }
 
 func (dc *dockerClient) containerImageNames(ctx context.Context, containerID string) ([]string, error) {
@@ -47,11 +50,11 @@ func (dc *dockerClient) containerImageNames(ctx context.Context, containerID str
 	}
 	dc.mu.Unlock()
 
-	inspect, err := dc.api.ContainerInspect(ctx, containerID)
+	inspect, err := dc.api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
-	imgInspect, _, err := dc.api.ImageInspectWithRaw(ctx, inspect.Config.Image)
+	imgInspect, err := dc.api.ImageInspect(ctx, inspect.Container.Config.Image)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +115,7 @@ func (dc *dockerClient) hasBinary(ctx context.Context, containerID, binary strin
 	if _, err := stdcopy.StdCopy(io.Discard, &stderr, attach.Reader); err != nil {
 		return false, err
 	}
-	info, err := dc.api.ContainerExecInspect(ctx, execID)
+	info, err := dc.api.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 	if err != nil {
 		return false, err
 	}
@@ -137,7 +140,7 @@ func (dc *dockerClient) execCollect(ctx context.Context, containerID string, cmd
 	if _, err := stdcopy.StdCopy(&stdout, &stderr, attach.Reader); err != nil {
 		return nil, err
 	}
-	info, err := dc.api.ContainerExecInspect(ctx, execID)
+	info, err := dc.api.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -147,20 +150,20 @@ func (dc *dockerClient) execCollect(ctx context.Context, containerID string, cmd
 	return stdout.Bytes(), nil
 }
 
-func (dc *dockerClient) startExec(ctx context.Context, containerID string, cmd, env []string) (string, types.HijackedResponse, error) {
-	resp, err := dc.api.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+func (dc *dockerClient) startExec(ctx context.Context, containerID string, cmd, env []string) (string, client.HijackedResponse, error) {
+	resp, err := dc.api.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		Cmd:          cmd,
 		Env:          env,
 		AttachStdout: true,
 		AttachStderr: true,
-		Tty:          false,
+		TTY:          false,
 	})
 	if err != nil {
-		return "", types.HijackedResponse{}, err
+		return "", client.HijackedResponse{}, err
 	}
-	attach, err := dc.api.ContainerExecAttach(ctx, resp.ID, container.ExecAttachOptions{})
+	attach, err := dc.api.ExecAttach(ctx, resp.ID, client.ExecAttachOptions{})
 	if err != nil {
-		return "", types.HijackedResponse{}, err
+		return "", client.HijackedResponse{}, err
 	}
-	return resp.ID, attach, nil
+	return resp.ID, attach.HijackedResponse, nil
 }
