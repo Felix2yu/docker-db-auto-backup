@@ -32,6 +32,13 @@ func TestKopiaRepositoryArgs(t *testing.T) {
 	}
 }
 
+func TestKopiaPolicyArgs(t *testing.T) {
+	k := &kopiaClient{cfg: &kopiaConfig{policyCompression: "zstd"}}
+	want := []string{"policy", "set", "--global", "--compression", "zstd"}
+	if got := k.policyArgs(); !reflect.DeepEqual(got, want) {
+		t.Errorf("policyArgs: got %v, want %v", got, want)
+	}
+}
 func TestKopiaPosixMappedToFilesystem(t *testing.T) {
 	k := &kopiaClient{cfg: &kopiaConfig{repositoryType: "posix"}}
 	want := []string{

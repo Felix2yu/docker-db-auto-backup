@@ -73,6 +73,22 @@ func (k *kopiaClient) ensureRepository(ctx context.Context) error {
 	return nil
 }
 
+func (k *kopiaClient) policyArgs() []string {
+	return []string{
+		"policy", "set", "--global", "--compression", k.cfg.policyCompression,
+	}
+}
+
+func (k *kopiaClient) ensurePolicy(ctx context.Context) error {
+	if k.cfg.policyCompression == "" {
+		return nil
+	}
+	if _, err := k.run(ctx, k.policyArgs()...); err != nil {
+		return fmt.Errorf("设置 kopia 压缩策略失败: %w", err)
+	}
+	return nil
+}
+
 func (k *kopiaClient) snapshotCreate(ctx context.Context, path string) error {
 	if _, err := k.run(ctx, "snapshot", "create", path); err != nil {
 		return err

@@ -31,6 +31,7 @@ func TestLoadKopiaConfig(t *testing.T) {
 	t.Setenv("KOPIA_PASSWORD", "secret")
 	t.Setenv("KOPIA_REPOSITORY_FLAGS", "--bucket=abc --endpoint=http://localhost:9000")
 	t.Setenv("KOPIA_CREATE_REPOSITORY", "true")
+	t.Setenv("KOPIA_POLICY_COMPRESSION", "zst")
 	t.Setenv("KOPIA_CONFIG_FILE", "")
 
 	cfg := loadKopiaConfig("/var/backups")
@@ -45,6 +46,9 @@ func TestLoadKopiaConfig(t *testing.T) {
 	}
 	if cfg.createRepository != true {
 		t.Error("createRepository should be true")
+	}
+	if cfg.policyCompression != "zst" {
+		t.Errorf("policyCompression: got %q, want zst", cfg.policyCompression)
 	}
 	wantConfig := "/var/backups/.kopia/repository.config"
 	if cfg.configFile != wantConfig {

@@ -26,11 +26,12 @@ type config struct {
 }
 
 type kopiaConfig struct {
-	repositoryType   string
-	password         string
-	repositoryFlags  string
-	createRepository bool
-	configFile       string
+	repositoryType    string
+	password          string
+	repositoryFlags   string
+	createRepository  bool
+	configFile        string
+	policyCompression string
 }
 
 func loadConfig() *config {
@@ -60,11 +61,12 @@ func loadKopiaConfig(backupDir string) *kopiaConfig {
 		configFile = filepath.Join(backupDir, ".kopia", "repository.config")
 	}
 	return &kopiaConfig{
-		repositoryType:   strings.TrimSpace(os.Getenv("KOPIA_REPOSITORY_TYPE")),
-		password:         os.Getenv("KOPIA_PASSWORD"),
-		repositoryFlags:  strings.TrimSpace(os.Getenv("KOPIA_REPOSITORY_FLAGS")),
-		createRepository: envIsTrue("KOPIA_CREATE_REPOSITORY"),
-		configFile:       configFile,
+		repositoryType:    strings.TrimSpace(os.Getenv("KOPIA_REPOSITORY_TYPE")),
+		password:          os.Getenv("KOPIA_PASSWORD"),
+		repositoryFlags:   strings.TrimSpace(os.Getenv("KOPIA_REPOSITORY_FLAGS")),
+		createRepository:  envIsTrue("KOPIA_CREATE_REPOSITORY"),
+		configFile:        configFile,
+		policyCompression: strings.ToLower(strings.TrimSpace(os.Getenv("KOPIA_POLICY_COMPRESSION"))),
 	}
 }
 

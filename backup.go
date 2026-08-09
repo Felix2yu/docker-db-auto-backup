@@ -106,6 +106,12 @@ func backup(ctx context.Context, cfg *config, runAt time.Time) error {
 			}
 			return err
 		}
+		if err := kopia.ensurePolicy(ctx); err != nil {
+			if hcURL != "" {
+				hcPing(hcURL+"/fail", "")
+			}
+			return err
+		}
 		if err := kopia.snapshotCreate(ctx, backupBase); err != nil {
 			if hcURL != "" {
 				hcPing(hcURL+"/fail", "")
