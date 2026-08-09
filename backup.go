@@ -17,8 +17,9 @@ import (
 )
 
 type backupResult struct {
-	name string
-	dbs  []databaseInfo
+	name         string
+	providerType string
+	dbs          []databaseInfo
 }
 
 type databaseInfo struct {
@@ -204,7 +205,7 @@ func backupContainer(ctx context.Context, cfg *config, dc *dockerClient, c types
 		dbs = nil
 	}
 
-	return &backupResult{name: name, dbs: dbs}, nil
+	return &backupResult{name: name, providerType: provider.name, dbs: dbs}, nil
 }
 
 func containerName(c types.Container) string {
