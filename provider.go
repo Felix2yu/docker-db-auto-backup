@@ -95,7 +95,7 @@ func psqlSingleDB(ctx context.Context, dc *dockerClient, containerID string) ([]
 	}
 	user := postgresUserEnv(env)
 	out, err := dc.execCollect(ctx, containerID, []string{
-		"psql", "-U", user, "-t", "-A", "-c", "SELECT datname FROM pg_database ORDER BY datname",
+		"psql", "-U", user, "-t", "-A", "-c", "SELECT datname FROM pg_database WHERE datallowconn ORDER BY datname",
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("列出数据库失败: %w", err)
