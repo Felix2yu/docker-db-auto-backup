@@ -93,7 +93,7 @@ assert_four_files ""
 
 snapshot_out=$(docker compose exec -T \
   -e KOPIA_PASSWORD=testpass \
-  -e KOPIA_CONFIG_FILE=/var/backups/.kopia/repository.config \
+  -e KOPIA_CONFIG_PATH=/var/backups/.kopia/repository.config \
   backup kopia snapshot list 2>/dev/null || true)
 if [ -z "$snapshot_out" ]; then
   echo "kopia snapshot not found"
