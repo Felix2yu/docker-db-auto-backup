@@ -98,6 +98,23 @@ func backup(ctx context.Context, cfg *config, runAt time.Time) error {
 		return fmt.Errorf("%d 个容器备份失败: %w", len(errs), errs[0])
 	}
 
+	if cfg.kopiaEnabled() {
+		kopia := newKopiaClient(cfg)
+		if err := kopia.ensureRepository(ctx); err != nil {
+			if hcURL != "" {
+				hcPing(hcURL+"/fail", "")
+			}
+			return err
+		}
+		if err := kopia.snapshotCreate(ctx, backupBase); err != nil {
+			if hcURL != "" {
+				hcPing(hcURL+"/fail", "")
+			}
+			return err
+		}
+		fmt.Println("Kopia 快照已推送")
+	}
+
 	duration := time.Since(runAt)
 	durationStr := fmt.Sprintf("%.2f 秒", duration.Seconds())
 	if duration >= time.Minute {
@@ -156,7 +173,7 @@ func backupContainer(ctx context.Context, cfg *config, dc *dockerClient, c types
 
 				backupFile := filepath.Join(dbDir,
 					fmt.Sprintf("%s.%s%s", db.name, provider.fileExt,
-						compressedExtension(cfg.compression)))
+						compressedExtension(cfg.effectiveCompression())))
 				description := fmt.Sprintf("%s/%s (%s)", name, db.name, provider.name)
 				if err := writeBackup(ctx, cfg, dc, c.ID, db.command, backupFile, description); err != nil {
 					return nil, err
@@ -173,7 +190,7 @@ func backupContainer(ctx context.Context, cfg *config, dc *dockerClient, c types
 			return nil, fmt.Errorf("%s (%s): %w", name, provider.name, err)
 		}
 		backupFile := filepath.Join(backupBase,
-			fmt.Sprintf("%s.%s%s", name, provider.fileExt, compressedExtension(cfg.compression)))
+			fmt.Sprintf("%s.%s%s", name, provider.fileExt, compressedExtension(cfg.effectiveCompression())))
 		description := fmt.Sprintf("%s (%s)", name, provider.name)
 		if err := writeBackup(ctx, cfg, dc, c.ID, command, backupFile, description); err != nil {
 			return nil, err
@@ -205,7 +222,7 @@ func writeBackup(ctx context.Context, cfg *config, dc *dockerClient, containerID
 	}
 	defer attach.Close()
 
-	cw, err := newCompressWriter(tmp, cfg.compression)
+	cw, err := newCompressWriter(tmp, cfg.effectiveCompression())
 	if err != nil {
 		tmp.Close()
 		return err

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -21,11 +22,21 @@ type config struct {
 	puid            int
 	pgid            int
 	showProgress    bool
+	kopia           *kopiaConfig
+}
+
+type kopiaConfig struct {
+	repositoryType   string
+	password         string
+	repositoryFlags  string
+	createRepository bool
+	configFile       string
 }
 
 func loadConfig() *config {
+	backupDir := envOr("BACKUP_DIR", "/var/backups")
 	return &config{
-		backupDir:       envOr("BACKUP_DIR", "/var/backups"),
+		backupDir:       backupDir,
 		schedule:        os.Getenv("SCHEDULE"),
 		compression:     strings.ToLower(envOr("COMPRESSION", "plain")),
 		singleDBMode:    envIsTrue("SINGLE_DB_MODE"),
@@ -36,7 +47,36 @@ func loadConfig() *config {
 		puid:            envInt("PUID", 0),
 		pgid:            envInt("PGID", 0),
 		showProgress:    term.IsTerminal(int(os.Stdout.Fd())),
+		kopia:           loadKopiaConfig(backupDir),
 	}
+}
+
+func loadKopiaConfig(backupDir string) *kopiaConfig {
+	if os.Getenv("KOPIA_REPOSITORY_TYPE") == "" {
+		return nil
+	}
+	configFile := os.Getenv("KOPIA_CONFIG_FILE")
+	if configFile == "" {
+		configFile = filepath.Join(backupDir, ".kopia", "repository.config")
+	}
+	return &kopiaConfig{
+		repositoryType:   strings.TrimSpace(os.Getenv("KOPIA_REPOSITORY_TYPE")),
+		password:         os.Getenv("KOPIA_PASSWORD"),
+		repositoryFlags:  strings.TrimSpace(os.Getenv("KOPIA_REPOSITORY_FLAGS")),
+		createRepository: envIsTrue("KOPIA_CREATE_REPOSITORY"),
+		configFile:       configFile,
+	}
+}
+
+func (c *config) kopiaEnabled() bool {
+	return c.kopia != nil
+}
+
+func (c *config) effectiveCompression() string {
+	if c.kopiaEnabled() {
+		return "plain"
+	}
+	return c.compression
 }
 
 func envOr(key, fallback string) string {

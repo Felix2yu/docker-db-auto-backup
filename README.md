@@ -28,6 +28,13 @@
 | `SHOUTRRR_URLS` | `-` | 逗号分隔的 [Shoutrrr](https://github.com/containrrr/shoutrrr) 通知 URL 列表，备份完成后发送通知 |
 | `HEALTHCHECKS_URL` | `-` | [Healthchecks](https://healthchecks.io/) Ping URL（完整地址，如 `https://hc-ping.com/<uuid>` 或自建 `https://hc.example.com/ping/<uuid>`），程序会自动附加 `/start`、`/fail` 等后缀 |
 | `SHOW_PROGRESS` | 自动 | 备份时显示进度条（默认在 TTY 中启用） |
+| `KOPIA_REPOSITORY_TYPE` | `-` | 启用 Kopia 快照以进行异地备份。仓库类型：`filesystem`（本地路径，配合 `--path=`）、`s3`（配合 `--bucket=` 等）；若使用旧名称 `posix` 会被自动映射为 `filesystem` |
+| `KOPIA_PASSWORD` | `-` | Kopia 仓库加密密码（必填，用于创建或连接仓库） |
+| `KOPIA_REPOSITORY_FLAGS` | `-` | Kopia 仓库连接/创建参数，空格分隔，例如 `--path=/var/backups/kopia-repo` 或 `--bucket=my-bucket --endpoint=https://s3.example.com` |
+| `KOPIA_CREATE_REPOSITORY` | `false` | 设为 `true` 时首次备份自动创建仓库；否则尝试连接已有仓库 |
+| `KOPIA_CONFIG_FILE` | `{BACKUP_DIR}/.kopia/repository.config` | Kopia 仓库配置文件路径（本地持久化后可在删除远程仓库时复用） |
+
+> 启用 Kopia 后，备份文件始终保持 `plain`（不压缩）格式，由 Kopia 负责内容去重与加密，避免"先压缩再加密快照"带来的重复空间浪费。
 
 ### 单库备份模式（SINGLE_DB_MODE）
 
@@ -86,6 +93,22 @@ services:
       - SHOUTRRR_URLS=slack://token-a/token-b/token-c
       - SINGLE_DB_MODE=true
 ```
+
+### 单个 Kopia（异地备份）
+
+Kopia 自动把当天的备份目录做成内容寻址的快照并推送到远程仓库（支持 S3、B2、GCS、WebDAV、SFTP 等）。仅增加极少环境变量：
+
+```yml
+environment:
+  - KOPIA_REPOSITORY_TYPE=s3
+  - KOPIA_PASSWORD=changeme
+  - KOPIA_REPOSITORY_FLAGS=--bucket=db-backup --endpoint=https://s3.eu-central-003.backblazeb2.com
+```
+
+- 首次备份时仓库可用 `KOPIA_CREATE_REPOSITORY=true` 自动创建；之后设回 `false` 即可连接已有仓库继续增量备份。
+- 由于 Kopia 按内容去重，多天备份只会产生增量空间占用。
+- 备份文件在启用 Kopia 时保持 `plain` 格式，由 Kopia 统一加密与压缩。
+- `KOPIA_CONFIG_FILE` 默认放在备份目录内，丢失时以 `repository.config` 与密码即可重新连接。
 
 ### 一次性运行
 

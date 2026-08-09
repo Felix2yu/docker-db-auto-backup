@@ -52,7 +52,7 @@ stat_size() {
 assert_four_files() {
   local ext=$1
   local dir
-  dir=$(ls -d backups/*/ | sort | tail -n 1)
+  dir=$(ls -d backups/[0-9]*/ | sort | tail -n 1)
 
   for name in mariadb-1 mysql-1 psql-1; do
     local f="$dir/docker-db-auto-backup-$name.sql$ext"
@@ -74,5 +74,30 @@ for algo in gzip xz bz2; do
   run_backup "$algo"
   assert_four_files "$(extension_for "$algo")"
 done
+
+echo "> Kopia posix 仓库快照测试..."
+
+docker compose exec -T backup rm -rf /var/backups/kopia-repo /var/backups/.kopia
+
+docker compose exec -T \
+  -e SCHEDULE= \
+  -e COMPRESSION=gzip \
+  -e BACKUP_DIR=/var/backups \
+  -e KOPIA_REPOSITORY_TYPE=posix \
+  -e KOPIA_PASSWORD=testpass \
+  -e 'KOPIA_REPOSITORY_FLAGS=--path=/var/backups/kopia-repo' \
+  -e KOPIA_CREATE_REPOSITORY=true \
+  backup /usr/local/bin/db-auto-backup
+
+assert_four_files ""
+
+snapshot_out=$(docker compose exec -T \
+  -e KOPIA_PASSWORD=testpass \
+  -e KOPIA_CONFIG_FILE=/var/backups/.kopia/repository.config \
+  backup kopia snapshot list 2>/dev/null || true)
+if [ -z "$snapshot_out" ]; then
+  echo "kopia snapshot not found"
+  exit 1
+fi
 
 echo "> E2E test passed"
