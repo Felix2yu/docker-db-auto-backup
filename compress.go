@@ -42,3 +42,17 @@ func newCompressWriter(w io.Writer, algorithm string) (io.WriteCloser, error) {
 	}
 	return nil, fmt.Errorf("未知的压缩方式 %s", algorithm)
 }
+
+func newDecompressReader(r io.Reader, algorithm string) (io.Reader, error) {
+	switch algorithm {
+	case "gzip":
+		return gzip.NewReader(r)
+	case "lzma", "xz":
+		return xz.NewReader(r)
+	case "bz2":
+		return bzip2.NewReader(r, nil)
+	case "plain":
+		return r, nil
+	}
+	return nil, fmt.Errorf("未知的压缩方式 %s", algorithm)
+}

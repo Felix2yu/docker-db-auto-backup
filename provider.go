@@ -77,7 +77,15 @@ func mysqlBackupCommand(ctx context.Context, dc *dockerClient, containerID strin
 }
 
 func redisBackupCommand(ctx context.Context, dc *dockerClient, containerID string) ([]string, error) {
-	return []string{"sh", "-c", "redis-cli SAVE > /dev/null 2>&1 || valkey-cli SAVE > /dev/null 2>&1 && cat /data/dump.rdb"}, nil
+	cli := "redis-cli"
+	ok, err := dc.hasBinary(ctx, containerID, "valkey-cli")
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		cli = "valkey-cli"
+	}
+	return []string{"sh", "-c", cli + " SAVE > /dev/null && cat /data/dump.rdb"}, nil
 }
 
 func psqlSingleDB(ctx context.Context, dc *dockerClient, containerID string) ([]database, error) {
@@ -175,6 +183,8 @@ var providers = []*backupProvider{
 		patterns: []string{
 			"postgres",
 			"tensorchord/pgvecto-rs",
+			"tensorchord/vchord-postgres",
+			"tensorchord/vchord-suite",
 			"nextcloud/aio-postgresql",
 			"timescale/timescaledb*",
 			"pgvector/pgvector",
@@ -196,7 +206,7 @@ var providers = []*backupProvider{
 	},
 	{
 		name:         "redis",
-		patterns:     []string{"redis", "valkey", "valkey*"},
+		patterns:     []string{"redis", "valkey", "valkey/valkey", "valkey*"},
 		fileExt:      "rdb",
 		backupMethod: redisBackupCommand,
 	},

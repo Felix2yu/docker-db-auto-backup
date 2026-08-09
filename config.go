@@ -22,6 +22,8 @@ type config struct {
 	puid            int
 	pgid            int
 	showProgress    bool
+	backupValidate  bool
+	ntfyMarkdown    bool
 	kopia           *kopiaConfig
 }
 
@@ -48,6 +50,8 @@ func loadConfig() *config {
 		puid:            envInt("PUID", 0),
 		pgid:            envInt("PGID", 0),
 		showProgress:    term.IsTerminal(int(os.Stdout.Fd())),
+		backupValidate:  envBoolDefaultTrue("BACKUP_VALIDATE"),
+		ntfyMarkdown:    envBoolDefaultTrue("NTFY_MARKDOWN"),
 		kopia:           loadKopiaConfig(backupDir),
 	}
 }
@@ -94,6 +98,13 @@ func envIsTrue(key string) bool {
 		return true
 	}
 	return false
+}
+
+func envBoolDefaultTrue(key string) bool {
+	if v := os.Getenv(key); v == "" {
+		return true
+	}
+	return envIsTrue(key)
 }
 
 func envInt(key string, fallback int) int {

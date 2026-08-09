@@ -132,7 +132,7 @@ func backup(ctx context.Context, cfg *config, runAt time.Time) error {
 	tree := formatTree(results)
 
 	if len(cfg.shoutrrrURLs) > 0 {
-		notifyShoutrrr(ctx, cfg.shoutrrrURLs,
+		notifyShoutrrr(ctx, cfg, cfg.shoutrrrURLs,
 			fmt.Sprintf("成功备份 %d 个容器，耗时 %s。\n\n已备份容器:\n%s",
 				len(results), durationStr, tree))
 	}
@@ -181,7 +181,7 @@ func backupContainer(ctx context.Context, cfg *config, dc *dockerClient, c types
 					fmt.Sprintf("%s.%s%s", db.name, provider.fileExt,
 						compressedExtension(cfg.effectiveCompression())))
 				description := fmt.Sprintf("%s/%s (%s)", name, db.name, provider.name)
-				if err := writeBackup(ctx, cfg, dc, c.ID, db.command, backupFile, description); err != nil {
+				if err := writeBackup(ctx, cfg, dc, c.ID, db.command, backupFile, provider.fileExt, description); err != nil {
 					return nil, err
 				}
 				dbs = append(dbs, databaseInfo{name: db.name, isSystem: db.isSystem})
@@ -198,7 +198,7 @@ func backupContainer(ctx context.Context, cfg *config, dc *dockerClient, c types
 		backupFile := filepath.Join(backupBase,
 			fmt.Sprintf("%s.%s%s", name, provider.fileExt, compressedExtension(cfg.effectiveCompression())))
 		description := fmt.Sprintf("%s (%s)", name, provider.name)
-		if err := writeBackup(ctx, cfg, dc, c.ID, command, backupFile, description); err != nil {
+		if err := writeBackup(ctx, cfg, dc, c.ID, command, backupFile, provider.fileExt, description); err != nil {
 			return nil, err
 		}
 		dbs = nil
@@ -214,7 +214,7 @@ func containerName(c types.Container) string {
 	return c.ID[:12]
 }
 
-func writeBackup(ctx context.Context, cfg *config, dc *dockerClient, containerID string, cmd []string, backupFile, description string) error {
+func writeBackup(ctx context.Context, cfg *config, dc *dockerClient, containerID string, cmd []string, backupFile, fileExt, description string) error {
 	tmp, err := os.CreateTemp(filepath.Dir(backupFile), ".auto-backup-")
 	if err != nil {
 		return err
@@ -257,6 +257,22 @@ func writeBackup(ctx context.Context, cfg *config, dc *dockerClient, containerID
 	}
 
 	applyOwnership(tmpPath, cfg)
+
+	fi, err := os.Stat(tmpPath)
+	if err != nil {
+		return err
+	}
+	if fi.Size() == 0 {
+		os.Remove(tmpPath)
+		return fmt.Errorf("%s: 备份为空（0 字节），已丢弃", description)
+	}
+
+	if cfg.backupValidate {
+		if err := validateBackupFile(cfg, tmpPath, fileExt); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("%s: 备份校验失败，已丢弃: %w", description, err)
+		}
+	}
 
 	if !cfg.showProgress {
 		fmt.Println(description)

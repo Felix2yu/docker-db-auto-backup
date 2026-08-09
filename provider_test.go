@@ -11,9 +11,12 @@ func TestGetBackupProvider(t *testing.T) {
 		"tensorchord/pgvecto-rs":      "postgres",
 		"nextcloud/aio-postgresql":    "postgres",
 		"timescale/timescaledb":       "postgres",
+		"tensorchord/vchord-postgres": "postgres",
+		"tensorchord/vchord-suite":    "postgres",
 		"pgvector/pgvector":           "postgres",
 		"redis":                       "redis",
 		"valkey":                      "redis",
+		"valkey/valkey":               "redis",
 		"pgautoupgrade/pgautoupgrade": "postgres",
 		"immich-app/postgres":         "postgres",
 	}
