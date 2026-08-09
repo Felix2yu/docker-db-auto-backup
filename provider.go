@@ -151,10 +151,12 @@ func mysqlSingleDB(ctx context.Context, dc *dockerClient, containerID string) ([
 		if line == "" {
 			continue
 		}
+		if systemDatabasesMySQL[line] {
+			continue
+		}
 		dbs = append(dbs, database{
-			name:     line,
-			command:  []string{"bash", "-c", binary + " " + auth + " " + line},
-			isSystem: systemDatabasesMySQL[line],
+			name:    line,
+			command: []string{"bash", "-c", binary + " " + auth + " " + line},
 		})
 	}
 	return dbs, nil
