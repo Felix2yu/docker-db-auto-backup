@@ -37,14 +37,17 @@ func formatTree(results []backupResult) string {
 	}
 
 	var b strings.Builder
-	for _, key := range groupOrder {
-		b.WriteString("**")
+	for i, key := range groupOrder {
+		if i > 0 {
+			b.WriteString("\n---\n\n")
+		}
+		b.WriteString("### ")
 		display := providerDisplayNames[key]
 		if display == "" {
 			display = "其他"
 		}
 		b.WriteString(display)
-		b.WriteString("**\n")
+		b.WriteString("\n\n")
 		for _, r := range byProvider[key] {
 			b.WriteString("- ")
 			b.WriteString(r.name)
