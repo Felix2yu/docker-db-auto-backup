@@ -1,14 +1,28 @@
 version: 2
-
 updates:
-  - package-ecosystem: gomod
-    directory: /
+  # Go 模块依赖
+  - package-ecosystem: "gomod"
+    directory: "/"
     schedule:
-      interval: daily
+      interval: "daily"
+      time: "00:00"
+      timezone: "UTC"
     open-pull-requests-limit: 10
 
-  - package-ecosystem: github-actions
-    directory: /
+  # Docker 基础镜像
+  - package-ecosystem: "docker"
+    directory: "/"
     schedule:
-      interval: daily
+      interval: "daily"
+      time: "00:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+
+  # GitHub Actions 工作流
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "00:00"
+      timezone: "UTC"
     open-pull-requests-limit: 10
