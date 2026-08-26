@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/db-auto-backup .
 
-FROM alpine:3.21 AS kopia
+FROM alpine:3.24 AS kopia
 
 ARG TARGETARCH
 ARG KOPIA_VERSION=0.23.1
@@ -29,7 +29,7 @@ RUN apk add --no-cache curl \
  && install -m 0755 "/tmp/kopia-${KOPIA_VERSION}-linux-${arch}/kopia" /out/kopia \
  && rm -f /tmp/kopia.tar.gz
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 ENV SCHEDULE="0 0 * * *" TZ=Asia/Shanghai
 
