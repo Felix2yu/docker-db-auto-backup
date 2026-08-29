@@ -26,13 +26,9 @@ type databaseInfo struct {
 	isSystem bool
 }
 
-func backup(ctx context.Context, cfg *config, runAt time.Time) error {
+func backup(ctx context.Context, cfg *config, dc *dockerClient, runAt time.Time) error {
 	fmt.Println("开始备份...")
 
-	dc, err := newDockerClient(ctx)
-	if err != nil {
-		return err
-	}
 	containers, err := dc.listContainers(ctx)
 	if err != nil {
 		return err

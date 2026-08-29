@@ -1,6 +1,6 @@
 module auto-backup
 
-go 1.26.5
+go 1.27
 
 replace github.com/containrrr/shoutrrr => github.com/Felix2yu/shoutrrr v1.0.0
 

@@ -19,17 +19,27 @@ func main() {
 
 	if cfg.schedule != "" {
 		fmt.Printf("正在按计划 '%s' 运行备份。\n", cfg.schedule)
-		runScheduled(ctx, cfg)
+		dc, err := newDockerClient(ctx)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		runScheduled(ctx, cfg, dc)
 		return
 	}
 
-	if err := backup(ctx, cfg, time.Now()); err != nil {
+	dc, err := newDockerClient(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := backup(ctx, cfg, dc, time.Now()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func runScheduled(ctx context.Context, cfg *config) {
+func runScheduled(ctx context.Context, cfg *config, dc *dockerClient) {
 	schedule, err := cron.ParseStandard(cfg.schedule)
 	if err != nil {
 		fmt.Printf("无效的备份计划: %s\n", cfg.schedule)
@@ -44,7 +54,7 @@ func runScheduled(ctx context.Context, cfg *config) {
 			return
 		case <-timer.C:
 		}
-		if err := backup(ctx, cfg, time.Now()); err != nil {
+		if err := backup(ctx, cfg, dc, time.Now()); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
