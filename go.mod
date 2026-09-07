@@ -7,8 +7,8 @@ replace github.com/containrrr/shoutrrr => github.com/Felix2yu/shoutrrr v1.0.0
 require (
 	github.com/containrrr/shoutrrr v1.0.0
 	github.com/dsnet/compress v0.0.1
-	github.com/moby/moby/api v1.55.0
-	github.com/moby/moby/client v0.5.1
+	github.com/moby/moby/api v1.56.0
+	github.com/moby/moby/client v0.6.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/ulikunitz/xz v0.5.16
