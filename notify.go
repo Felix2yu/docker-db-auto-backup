@@ -21,7 +21,7 @@ func notifyShoutrrr(ctx context.Context, cfg *config, urls []string, body string
 		if cfg.ntfyMarkdown && isNtfyURL(target) {
 			target = enableNtfyMarkdown(target)
 		}
-		if err := apprise.Send([]string{target}, body); err != nil {
+		if err := apprise.Send([]string{target}, body, apprise.WithInputFormat("markdown")); err != nil {
 			fmt.Printf("通知发送失败 (%s): %v\n", target, err)
 		}
 	}
