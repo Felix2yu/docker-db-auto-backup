@@ -10,7 +10,7 @@ require (
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/ulikunitz/xz v0.5.16
 	github.com/unraid/apprise-go v0.3.3
-	golang.org/x/term v0.45.0
+	golang.org/x/term v0.46.0
 )
 
 require (
@@ -39,7 +39,7 @@ require (
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 	mellium.im/reader v0.1.0 // indirect
