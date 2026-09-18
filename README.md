@@ -25,7 +25,7 @@
 | `SCHEDULE` | `0 0 * * *` | cron 调度表达式（设为空字符串则立即执行一次） |
 | `COMPRESSION` | `plain` | 压缩算法：`gzip` / `lzma` / `xz` / `bz2` / `plain` |
 | `SINGLE_DB_MODE` | `false` | 设为 `true` 时每个数据库单独备份为一个文件，用户数据与系统库分离 |
-| `SHOUTRRR_URLS` | `-` | 逗号分隔的 [Shoutrrr](https://github.com/containrrr/shoutrrr) 通知 URL 列表，备份完成后发送通知 |
+| `SHOUTRRR_URLS` | `-` | 逗号分隔的 [apprise-go](https://github.com/unraid/apprise-go) 通知 URL 列表，备份完成后发送通知 |
 | `HEALTHCHECKS_URL` | `-` | [Healthchecks](https://healthchecks.io/) Ping URL（完整地址，如 `https://hc-ping.com/<uuid>` 或自建 `https://hc.example.com/ping/<uuid>`），程序会自动附加 `/start`、`/fail` 等后缀 |
 | `SHOW_PROGRESS` | 自动 | 备份时显示进度条（默认在 TTY 中启用） |
 | `NTFY_MARKDOWN` | `true` | ntfy 通知启用 Markdown 渲染（自动为 `ntfy://` 地址追加 `markdown=yes`）。无需时设为 `false`，或直接在 URL 写 `?markdown=yes` |
@@ -58,11 +58,11 @@
 | PostgreSQL | `postgres`, `template0`, `template1` |
 | MySQL / MariaDB | `information_schema`, `mysql`, `performance_schema`, `sys` |
 
-### 通知（Shoutrrr）
+### 通知（Apprise）
 
-备份完成后可通过 [Shoutrrr](https://github.com/containrrr/shoutrrr) 发送通知到多种渠道，如 Slack、Discord、Telegram、邮件、ntfy 等。
+备份完成后可通过 [apprise-go](https://github.com/unraid/apprise-go) 发送通知到多种渠道，如 Slack、Discord、Telegram、邮件、ntfy 等。
 
-`SHOUTRRR_URLS` 为逗号分隔的 Shoutrrr URL 列表，例如：
+`SHOUTRRR_URLS` 为逗号分隔的 Apprise URL 列表，例如：
 
 ```yml
 environment:
@@ -71,7 +71,7 @@ environment:
 
 通知正文以 Markdown 格式发送。支持 Markdown 的渠道（如 Slack、Discord、Telegram 等）会自动渲染嵌套列表，清晰展示每个容器下备份的子库明细。
 
-Shoutrrr 支持多种通知渠道，URL 格式见 [Shoutrrr 文档](https://containrrr.dev/shoutrrr/)。
+Apprise 支持多种通知渠道，URL 格式见 [apprise-go 文档](https://github.com/unraid/apprise-go)。
 
 ### 压缩
 

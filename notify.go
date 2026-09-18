@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containrrr/shoutrrr"
+	apprise "github.com/unraid/apprise-go"
 )
 
 func notifyShoutrrr(ctx context.Context, cfg *config, urls []string, body string) {
@@ -21,7 +21,7 @@ func notifyShoutrrr(ctx context.Context, cfg *config, urls []string, body string
 		if cfg.ntfyMarkdown && isNtfyURL(target) {
 			target = enableNtfyMarkdown(target)
 		}
-		if err := shoutrrr.Send(target, body); err != nil {
+		if err := apprise.Send([]string{target}, body); err != nil {
 			fmt.Printf("通知发送失败 (%s): %v\n", target, err)
 		}
 	}
