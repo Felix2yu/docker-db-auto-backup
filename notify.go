@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -22,7 +21,7 @@ func notify(ctx context.Context, cfg *config, urls []string, body string) {
 			target = ensureNtfyMarkdownFormat(target)
 		}
 		if err := apprise.Send([]string{target}, body, apprise.WithInputFormat("markdown")); err != nil {
-			fmt.Printf("通知发送失败 (%s): %v\n", target, err)
+			logError("通知发送失败", "target", target, "error", err)
 		}
 	}
 }
@@ -53,6 +52,40 @@ func ensureNtfyMarkdownFormat(raw string) string {
 	return parsed.String()
 }
 
+// healthchecks 统一心跳出口（C10），避免每条失败路径各写一遍且丢失原因。
+type healthchecks struct {
+	base string
+}
+
+func newHealthchecks(cfg *config) *healthchecks {
+	return &healthchecks{base: strings.TrimRight(cfg.healthchecksURL, "/")}
+}
+
+func (h *healthchecks) enabled() bool { return h != nil && h.base != "" }
+
+func (h *healthchecks) start() {
+	if !h.enabled() {
+		return
+	}
+	hcPing(h.base+"/start", "")
+}
+
+// fail 上报失败，并把原因作为 body 提交，便于在 Healthchecks 面板直接看到现场。
+func (h *healthchecks) fail(reason string) {
+	if !h.enabled() {
+		return
+	}
+	hcPing(h.base+"/fail", reason)
+	logError("Healthchecks 上报失败", "reason", reason)
+}
+
+func (h *healthchecks) ok(msg string) {
+	if !h.enabled() {
+		return
+	}
+	hcPing(h.base, msg)
+}
+
 func hcPing(url, data string) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	var (
@@ -67,7 +100,7 @@ func hcPing(url, data string) {
 		resp, err = client.Get(url)
 	}
 	if err != nil {
-		fmt.Printf("Healthchecks 心跳失败 (%s): %v\n", url, err)
+		logError("Healthchecks 心跳失败", "url", url, "error", err)
 		return
 	}
 	defer resp.Body.Close()

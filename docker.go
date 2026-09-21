@@ -13,6 +13,9 @@ import (
 	"github.com/moby/moby/client"
 )
 
+// labelBackupProvider 允许在源容器上直接声明备份 provider，优先级高于镜像名识别。
+const labelBackupProvider = "backup.provider"
+
 type dockerClient struct {
 	api       client.APIClient
 	mu        sync.Mutex
@@ -42,6 +45,9 @@ func (dc *dockerClient) listContainers(ctx context.Context) ([]container.Summary
 	return res.Items, nil
 }
 
+// containerImageNames 按兜底链解析容器镜像名（C6）：
+// RepoTags → RepoDigests → Config.Image → 容器 labels。
+// 任一环节命中都会记录来源，避免"识别不到就静默跳过"。
 func (dc *dockerClient) containerImageNames(ctx context.Context, containerID string) ([]string, error) {
 	dc.mu.Lock()
 	if names, ok := dc.nameCache[containerID]; ok {
@@ -54,16 +60,63 @@ func (dc *dockerClient) containerImageNames(ctx context.Context, containerID str
 	if err != nil {
 		return nil, err
 	}
-	imgInspect, err := dc.api.ImageInspect(ctx, inspect.Container.Config.Image)
-	if err != nil {
-		return nil, err
+
+	var names []string
+	source := ""
+
+	if inspect.Container.Config != nil {
+		imageRef := inspect.Container.Config.Image
+		imgInspect, err := dc.api.ImageInspect(ctx, imageRef)
+		if err != nil {
+			logWarn("镜像信息读取失败，将尝试其他方式识别", "container", containerID, "image", imageRef, "error", err)
+		} else {
+			names = imageNamesFromTags(imgInspect.RepoTags)
+			source = "RepoTags"
+			if len(names) == 0 && len(imgInspect.RepoDigests) > 0 {
+				names = imageNamesFromDigests(imgInspect.RepoDigests)
+				source = "RepoDigests"
+			}
+		}
+		if len(names) == 0 && imageRef != "" && !strings.HasPrefix(imageRef, "sha256:") {
+			if n := imageNameFromTag(imageRef); n != "" {
+				names = []string{n}
+				source = "Config.Image"
+			}
+		}
 	}
-	names := imageNamesFromTags(imgInspect.RepoTags)
+
+	if len(names) == 0 && inspect.Container.Config != nil {
+		for _, key := range []string{"com.docker.compose.image", "org.opencontainers.image.ref.name"} {
+			if v := inspect.Container.Config.Labels[key]; v != "" {
+				if n := imageNameFromTag(v); n != "" {
+					names = append(names, n)
+					source = "label:" + key
+					break
+				}
+			}
+		}
+	}
+
+	if len(names) == 0 {
+		logWarn("无法识别容器镜像名，该容器将被跳过（可通过 backup.provider 标签或 BACKUP_IMAGE_PATTERNS_FILE 显式指定）",
+			"container", containerID)
+	} else {
+		logDebug("容器镜像识别完成", "container", containerID, "names", strings.Join(names, ","), "source", source)
+	}
 
 	dc.mu.Lock()
 	dc.nameCache[containerID] = names
 	dc.mu.Unlock()
 	return names, nil
+}
+
+// containerBackupProviderLabel 读取容器上显式声明的 provider（如 backup.provider=postgres）。
+func (dc *dockerClient) containerBackupProviderLabel(ctx context.Context, containerID string) string {
+	inspect, err := dc.api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
+	if err != nil || inspect.Container.Config == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(inspect.Container.Config.Labels[labelBackupProvider]))
 }
 
 func (dc *dockerClient) containerEnv(ctx context.Context, containerID string) (map[string]string, error) {
@@ -115,19 +168,27 @@ func (dc *dockerClient) hasBinary(ctx context.Context, containerID, binary strin
 	if _, err := stdcopy.StdCopy(io.Discard, &stderr, attach.Reader); err != nil {
 		return false, err
 	}
-	info, err := dc.api.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+	code, err := dc.execExitCode(ctx, execID)
 	if err != nil {
 		return false, err
 	}
-	exists := info.ExitCode == 0
 
 	dc.mu.Lock()
 	if dc.binCache[containerID] == nil {
 		dc.binCache[containerID] = map[string]bool{}
 	}
-	dc.binCache[containerID][binary] = exists
+	dc.binCache[containerID][binary] = code == 0
 	dc.mu.Unlock()
-	return exists, nil
+	return code == 0, nil
+}
+
+// execExitCode 查询已执行进程的退出码（C2）。
+func (dc *dockerClient) execExitCode(ctx context.Context, execID string) (int, error) {
+	info, err := dc.api.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return info.ExitCode, nil
 }
 
 func (dc *dockerClient) execCollect(ctx context.Context, containerID string, cmd, env []string) ([]byte, error) {
@@ -140,12 +201,12 @@ func (dc *dockerClient) execCollect(ctx context.Context, containerID string, cmd
 	if _, err := stdcopy.StdCopy(&stdout, &stderr, attach.Reader); err != nil {
 		return nil, err
 	}
-	info, err := dc.api.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+	code, err := dc.execExitCode(ctx, execID)
 	if err != nil {
 		return nil, err
 	}
-	if info.ExitCode != 0 {
-		return nil, fmt.Errorf("命令执行失败 (exit %d): %s", info.ExitCode, strings.TrimSpace(stderr.String()))
+	if code != 0 {
+		return nil, fmt.Errorf("命令执行失败 (exit %d): %s", code, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
 }

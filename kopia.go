@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 type kopiaClient struct {
@@ -73,25 +76,116 @@ func (k *kopiaClient) ensureRepository(ctx context.Context) error {
 	return nil
 }
 
+// policyArgs 合并压缩策略与保留策略（B6）。
 func (k *kopiaClient) policyArgs() []string {
-	return []string{
-		"policy", "set", "--global", "--compression", k.cfg.policyCompression,
+	args := []string{"policy", "set", "--global"}
+	if k.cfg.policyCompression != "" {
+		args = append(args, "--compression", k.cfg.policyCompression)
 	}
+	if k.cfg.retentionFlags != "" {
+		args = append(args, strings.Fields(k.cfg.retentionFlags)...)
+	}
+	return args
 }
 
 func (k *kopiaClient) ensurePolicy(ctx context.Context) error {
-	if k.cfg.policyCompression == "" {
+	if k.cfg.policyCompression == "" && k.cfg.retentionFlags == "" {
 		return nil
 	}
 	if _, err := k.run(ctx, k.policyArgs()...); err != nil {
-		return fmt.Errorf("设置 kopia 压缩策略失败: %w", err)
+		return fmt.Errorf("设置 kopia 策略失败: %w", err)
 	}
 	return nil
 }
 
-func (k *kopiaClient) snapshotCreate(ctx context.Context, path string) error {
-	if _, err := k.run(ctx, "snapshot", "create", path); err != nil {
+// snapshotCreate 推送快照并解析快照 ID，便于在通知与清单中追溯（B6）。
+func (k *kopiaClient) snapshotCreate(ctx context.Context, path, description string) (string, error) {
+	args := []string{"snapshot", "create", "--json"}
+	if description != "" {
+		args = append(args, "--description", description)
+	}
+	args = append(args, path)
+	out, err := k.run(ctx, args...)
+	if err != nil {
+		return "", err
+	}
+	return parseSnapshotID(out), nil
+}
+
+func parseSnapshotID(out string) string {
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return ""
+	}
+	// 优先取最后一行 JSON（kopia 可能先输出进度信息）。
+	lines := strings.Split(out, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var parsed struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(line), &parsed); err == nil && parsed.ID != "" {
+			return parsed.ID
+		}
+	}
+	return ""
+}
+
+// maybeMaintenance 按间隔执行仓库维护（B6），避免远端仓库只增不减、性能退化。
+func (k *kopiaClient) maybeMaintenance(ctx context.Context, backupDir string) error {
+	if k.cfg.maintenanceInterval <= 0 {
+		return nil
+	}
+	marker := filepath.Join(filepath.Dir(k.cfg.configFile), ".last-maintenance")
+	shouldRun := true
+	if data, err := os.ReadFile(marker); err == nil {
+		if ts, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data))); err == nil {
+			shouldRun = time.Since(ts) >= k.cfg.maintenanceInterval
+		}
+	}
+	if !shouldRun {
+		return nil
+	}
+	logInfo("开始执行 kopia 仓库维护")
+	if _, err := k.run(ctx, "maintenance", "run", "--full"); err != nil {
 		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err == nil {
+		os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+	}
+	return nil
+}
+
+// runKopia 串联仓库校验、策略、快照与维护，并把结果写进清单。
+func runKopia(ctx context.Context, cfg *config, path, dateDir string, collector *runCollector) error {
+	k := newKopiaClient(cfg)
+	if k == nil {
+		return nil
+	}
+	if err := k.ensureRepository(ctx); err != nil {
+		collector.setKopia(&kopiaManifestInfo{Pushed: false, Error: err.Error()})
+		return err
+	}
+	if err := k.ensurePolicy(ctx); err != nil {
+		collector.setKopia(&kopiaManifestInfo{Pushed: false, Error: err.Error()})
+		return err
+	}
+
+	description := fmt.Sprintf("auto-backup %s", dateDir)
+	id, err := k.snapshotCreate(ctx, path, description)
+	if err != nil {
+		collector.setKopia(&kopiaManifestInfo{Pushed: false, Error: err.Error()})
+		return err
+	}
+	collector.setKopia(&kopiaManifestInfo{Pushed: true, SnapshotID: id})
+	logInfo("Kopia 快照已创建", "snapshot", id, "description", description)
+
+	// 维护失败只告警，不影响本次备份结果。
+	if err := k.maybeMaintenance(ctx, cfg.backupDir); err != nil {
+		logWarn("kopia 仓库维护失败", "error", err)
 	}
 	return nil
 }

@@ -56,11 +56,36 @@ func TestValidateBackupContentSQLVariants(t *testing.T) {
 }
 
 func TestValidateBackupRDB(t *testing.T) {
-	if err := validateBackupContent(strings.NewReader("REDIS0015...."), "rdb"); err != nil {
+	// RDB 约定以 0xFF 作为结束标记
+	if err := validateBackupContent(strings.NewReader("REDIS0015....\xff"), "rdb"); err != nil {
 		t.Errorf("valid redis rdb rejected: %v", err)
 	}
-	if err := validateBackupContent(strings.NewReader("VALKE0015...."), "rdb"); err != nil {
+	if err := validateBackupContent(strings.NewReader("VALKE0015....\xff"), "rdb"); err != nil {
 		t.Errorf("valid valkey rdb rejected: %v", err)
+	}
+}
+
+// TestValidatePlainBackupNoFullRead 覆盖 A4：plain 备份不再全量读取，只 Seek 首尾。
+func TestValidatePlainBackupNoFullRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.sql")
+	cfg := &config{compression: "plain"}
+
+	content := "-- PostgreSQL database dump (16.3)\nCREATE TABLE t (id int);\n-- PostgreSQL database dump complete\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBackupFile(cfg, path, "sql"); err != nil {
+		t.Errorf("plain 备份校验失败: %v", err)
+	}
+
+	// 截断后应被识别（尾部缺少完成标记）
+	truncated := content[:len(content)-30]
+	if err := os.WriteFile(path, []byte(truncated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBackupFile(cfg, path, "sql"); err == nil {
+		t.Error("截断的 plain 备份应校验失败")
 	}
 }
 

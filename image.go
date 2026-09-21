@@ -37,3 +37,26 @@ func imageNamesFromTags(tags []string) []string {
 	}
 	return names
 }
+
+// imageNamesFromDigests 处理形如 "postgres@sha256:..." 的 RepoDigests，
+// 用于镜像无任何 tag（以 digest 拉取或原 tag 被覆盖）时的兜底识别。
+func imageNamesFromDigests(digests []string) []string {
+	var names []string
+	seen := map[string]struct{}{}
+	for _, digest := range digests {
+		repo := digest
+		if idx := strings.Index(repo, "@"); idx >= 0 {
+			repo = repo[:idx]
+		}
+		name := imageNameFromTag(repo)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
+}

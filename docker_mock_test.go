@@ -101,7 +101,7 @@ func (f *fakeAPIClient) ExecAttach(ctx context.Context, eid string, opts client.
 	res := f.execs[eid]
 	var reader *bufio.Reader
 	if res != nil {
-		reader = stdcopyEncode(res.stdout)
+		reader = stdcopyEncode(res.stdout, res.stderr)
 	} else {
 		reader = bufio.NewReader(bytes.NewReader(nil))
 	}
@@ -122,16 +122,20 @@ func (f *fakeAPIClient) ExecInspect(ctx context.Context, eid string, opts client
 	return client.ExecInspectResult{ExitCode: exit}, nil
 }
 
-// stdcopyEncode 将原始数据封装为 docker stdcopy 多路复用流（stdout 帧），
+// stdcopyEncode 将原始数据封装为 docker stdcopy 多路复用流（stdout 与 stderr 各一帧），
 // 供 HijackedResponse.Reader 被 stdcopy.StdCopy 解析使用。
-func stdcopyEncode(data []byte) *bufio.Reader {
-	header := make([]byte, 8)
-	header[0] = 1 // STREAM_TYPE_STDOUT
-	binary.BigEndian.PutUint32(header[4:8], uint32(len(data)))
+func stdcopyEncode(stdout, stderr []byte) *bufio.Reader {
 	var buf bytes.Buffer
-	buf.Write(header)
-	buf.Write(data)
+	buf.Write(stdcopyFrame(1, stdout))
+	buf.Write(stdcopyFrame(2, stderr))
 	return bufio.NewReader(&buf)
+}
+
+func stdcopyFrame(stream byte, data []byte) []byte {
+	header := make([]byte, 8)
+	header[0] = stream
+	binary.BigEndian.PutUint32(header[4:8], uint32(len(data)))
+	return append(header, data...)
 }
 
 // dumpHandler 根据命令内容返回模拟的 exec 输出，覆盖各 provider 与 docker 方法的逻辑分支。
@@ -149,8 +153,13 @@ func dumpHandler(cmd []string) (stdout, stderr []byte, exit int) {
 		return []byte("-- PostgreSQL database dump\n\n-- PostgreSQL database dump complete\n"), nil, 0
 	case strings.Contains(c, "mysqldump") || strings.Contains(c, "mariadb-dump"):
 		return []byte("-- MySQL dump 10.13  Distrib 8.4.2\n\nCREATE TABLE t (id int);\n-- Dump completed on 2026-08-09 04:00:00\n"), nil, 0
+	case strings.Contains(c, "CONFIG GET dir"):
+		return []byte("dir\n/data\n"), nil, 0
+	case strings.Contains(c, "CONFIG GET dbfilename"):
+		return []byte("dbfilename\ndump.rdb\n"), nil, 0
 	case strings.Contains(c, "redis-cli") || strings.Contains(c, "valkey-cli"):
-		return []byte("REDIS0011\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"), nil, 0
+		// RDB 约定以 0xFF 结束
+		return []byte("REDIS0011\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff"), nil, 0
 	case strings.Contains(c, "psql"):
 		// psql -t -A -c "SELECT datname ..." 列出数据库
 		return []byte("appdb\npostgres\ntemplate1\n"), nil, 0

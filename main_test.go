@@ -93,17 +93,53 @@ func TestBackupWithNotifyError(t *testing.T) {
 	}
 }
 
-func TestBackupContainerError(t *testing.T) {
-	fake, cidOK := makePostgresFake()
-	// 第二个容器没有 inspect 数据，会导致 backupContainer 失败
+// TestBackupPartialFailureKeepsGoing 覆盖 A1：
+// 一个容器失败时，其余容器的产出仍然保留，整体判为"部分失败"而不是中断。
+func TestBackupPartialFailureKeepsGoing(t *testing.T) {
+	fake := newFakeAPIClient()
+	fake.execHandler = func(cmd []string) ([]byte, []byte, int) {
+		joined := strings.Join(cmd, " ")
+		switch {
+		case cmd[0] == "env":
+			return []byte("POSTGRES_USER=postgres\n"), nil, 0
+		case strings.Contains(joined, "redis-cli"):
+			return nil, []byte("BGSAVE 失败"), 1
+		default:
+			return dumpHandler(cmd)
+		}
+	}
+	pgID := "cid-postgres"
+	fake.inspect[pgID] = container.InspectResponse{Config: &container.Config{Image: "postgres:14"}}
+	fake.imageTags["postgres:14"] = []string{"postgres:14"}
+	rdID := "cid-redis"
+	fake.inspect[rdID] = container.InspectResponse{Config: &container.Config{Image: "redis:7"}}
+	fake.imageTags["redis:7"] = []string{"redis:7"}
+
 	fake.containers = []container.Summary{
-		{ID: cidOK, Names: []string{"/pg"}},
-		{ID: "cid-broken", Names: []string{"/broken"}},
+		{ID: pgID, Names: []string{"/pg"}},
+		{ID: rdID, Names: []string{"/rd"}},
 	}
 	dc := newFakeDockerClient(fake)
-	cfg := &config{backupDir: t.TempDir(), compression: "plain", backupValidate: true}
-	if err := backup(context.Background(), cfg, dc, time.Now()); err == nil {
-		t.Fatal("存在容器备份失败时应返回错误")
+	cfg := &config{backupDir: t.TempDir(), compression: "plain", backupValidate: true, workers: 1}
+	at := time.Now()
+
+	// 部分失败不应返回 error：成功的产出仍需继续推送与通知。
+	if err := backup(context.Background(), cfg, dc, at); err != nil {
+		t.Fatalf("部分失败时不应中断整体流程: %v", err)
+	}
+	dir := filepath.Join(cfg.backupDir, at.Format("2006-01-02"))
+	m, err := readManifest(dir)
+	if err != nil {
+		t.Fatalf("读取清单失败: %v", err)
+	}
+	if m.Status != statusPartial {
+		t.Errorf("status = %s, want partial", m.Status)
+	}
+	if len(m.Containers) != 1 || m.Containers[0].Name != "pg" {
+		t.Errorf("成功的容器应被记录: %+v", m.Containers)
+	}
+	if len(m.Failures) != 1 {
+		t.Errorf("失败明细应有 1 条, got %d", len(m.Failures))
 	}
 }
 
@@ -116,6 +152,7 @@ func TestBackupKopiaFailure(t *testing.T) {
 	fake, cid := makePostgresFake()
 	fake.containers = []container.Summary{{ID: cid, Names: []string{"/pg"}}}
 	dc := newFakeDockerClient(fake)
+	at := time.Now()
 	cfg := &config{
 		backupDir:       t.TempDir(),
 		compression:     "plain",
@@ -127,9 +164,20 @@ func TestBackupKopiaFailure(t *testing.T) {
 			configFile:     filepath.Join(t.TempDir(), "repo.config"),
 		},
 	}
-	// PATH 中无 kopia，ensureRepository 失败，应返回错误
-	if err := backup(context.Background(), cfg, dc, time.Now()); err == nil {
-		t.Fatal("kopia 仓库失败应返回错误")
+	// PATH 中无 kopia，ensureRepository 失败。
+	// 备份本身是成功的，异地推送失败应降级为"部分失败"并记录，而不是让整轮备份作废。
+	if err := backup(context.Background(), cfg, dc, at); err != nil {
+		t.Fatalf("Kopia 失败不应让已成功的备份作废: %v", err)
+	}
+	m, err := readManifest(filepath.Join(cfg.backupDir, at.Format("2006-01-02")))
+	if err != nil {
+		t.Fatalf("读取清单失败: %v", err)
+	}
+	if m.Status != statusPartial {
+		t.Errorf("status = %s, want partial", m.Status)
+	}
+	if m.Kopia == nil || m.Kopia.Pushed {
+		t.Error("清单应记录异地快照失败")
 	}
 }
 

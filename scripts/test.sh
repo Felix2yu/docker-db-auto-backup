@@ -29,6 +29,7 @@ run_backup() {
     -e SCHEDULE= \
     -e COMPRESSION="$compression" \
     -e BACKUP_DIR=/var/backups \
+    -e BACKUP_MIN_FREE_SPACE=64M \
     backup /usr/local/bin/db-auto-backup
 }
 
@@ -65,6 +66,9 @@ assert_four_files() {
   [ -f "$rdb" ] || { echo "missing: $rdb"; exit 1; }
   [ "$(stat_mode "$rdb")" = "600" ] || { echo "bad mode: $rdb"; exit 1; }
   [ "$(stat_size "$rdb")" -gt 50 ] || { echo "too small: $rdb"; exit 1; }
+
+  # 每次备份都应留下清单，供 list / verify / status 使用
+  [ -f "$dir/manifest.json" ] || { echo "missing manifest: $dir/manifest.json"; exit 1; }
 }
 
 run_backup plain
@@ -99,5 +103,14 @@ if [ -z "$snapshot_out" ]; then
   echo "kopia snapshot not found"
   exit 1
 fi
+
+echo "> 子命令自检（status / verify / list）..."
+
+docker compose exec -T -e BACKUP_DIR=/var/backups \
+  backup /usr/local/bin/db-auto-backup status
+docker compose exec -T -e BACKUP_DIR=/var/backups \
+  backup /usr/local/bin/db-auto-backup verify
+docker compose exec -T -e BACKUP_DIR=/var/backups \
+  backup /usr/local/bin/db-auto-backup list
 
 echo "> E2E test passed"
