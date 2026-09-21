@@ -15,7 +15,7 @@ type config struct {
 	schedule        string
 	compression     string
 	singleDBMode    bool
-	shoutrrrURLs    []string
+	notifyURLs      []string
 	healthchecksURL string
 	retentionDays   int
 	workers         int
@@ -43,7 +43,7 @@ func loadConfig() *config {
 		schedule:        os.Getenv("SCHEDULE"),
 		compression:     strings.ToLower(envOr("COMPRESSION", "plain")),
 		singleDBMode:    envIsTrue("SINGLE_DB_MODE"),
-		shoutrrrURLs:    splitTrim(os.Getenv("SHOUTRRR_URLS")),
+		notifyURLs:      splitTrim(os.Getenv("NOTIFY_URLS")),
 		healthchecksURL: os.Getenv("HEALTHCHECKS_URL"),
 		retentionDays:   envInt("BACKUP_RETENTION_DAYS", 0),
 		workers:         envInt("BACKUP_WORKERS", runtime.NumCPU()),

@@ -12,14 +12,14 @@ import (
 	apprise "github.com/unraid/apprise-go"
 )
 
-func notifyShoutrrr(ctx context.Context, cfg *config, urls []string, body string) {
+func notify(ctx context.Context, cfg *config, urls []string, body string) {
 	for _, raw := range urls {
 		target := strings.TrimSpace(raw)
 		if target == "" {
 			continue
 		}
 		if cfg.ntfyMarkdown && isNtfyURL(target) {
-			target = enableNtfyMarkdown(target)
+			target = ensureNtfyMarkdownFormat(target)
 		}
 		if err := apprise.Send([]string{target}, body, apprise.WithInputFormat("markdown")); err != nil {
 			fmt.Printf("通知发送失败 (%s): %v\n", target, err)
@@ -31,14 +31,23 @@ func isNtfyURL(raw string) bool {
 	return strings.HasPrefix(strings.ToLower(raw), "ntfy:")
 }
 
-func enableNtfyMarkdown(raw string) string {
+// ensureNtfyMarkdownFormat makes apprise-go send the message to ntfy with the
+// markdown format so ntfy actually renders it.
+//
+// apprise-go's ntfy handler only honours the ?format= query parameter to decide
+// the message format: it sets ntfy's "X-Markdown: yes" header from it
+// (internal/notify/ntfy.go). The commonly used ?markdown=yes is silently
+// ignored, so the message arrives as plain text. Worse, with no format set the
+// ntfy default output format is "text", which makes apprise convert the body
+// markdown -> HTML -> text, stripping headings and mangling blank lines.
+func ensureNtfyMarkdownFormat(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return raw
 	}
 	q := parsed.Query()
-	if q.Get("markdown") == "" {
-		q.Set("markdown", "yes")
+	if q.Get("format") == "" {
+		q.Set("format", "markdown")
 		parsed.RawQuery = q.Encode()
 	}
 	return parsed.String()

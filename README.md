@@ -25,10 +25,10 @@
 | `SCHEDULE` | `0 0 * * *` | cron 调度表达式（设为空字符串则立即执行一次） |
 | `COMPRESSION` | `plain` | 压缩算法：`gzip` / `lzma` / `xz` / `bz2` / `plain` |
 | `SINGLE_DB_MODE` | `false` | 设为 `true` 时每个数据库单独备份为一个文件，用户数据与系统库分离 |
-| `SHOUTRRR_URLS` | `-` | 逗号分隔的 [apprise-go](https://github.com/unraid/apprise-go) 通知 URL 列表，备份完成后发送通知 |
+| `NOTIFY_URLS` | `-` | 逗号分隔的 [apprise-go](https://github.com/unraid/apprise-go) 通知 URL 列表，备份完成后发送通知 |
 | `HEALTHCHECKS_URL` | `-` | [Healthchecks](https://healthchecks.io/) Ping URL（完整地址，如 `https://hc-ping.com/<uuid>` 或自建 `https://hc.example.com/ping/<uuid>`），程序会自动附加 `/start`、`/fail` 等后缀 |
 | `SHOW_PROGRESS` | 自动 | 备份时显示进度条（默认在 TTY 中启用） |
-| `NTFY_MARKDOWN` | `true` | ntfy 通知启用 Markdown 渲染（自动为 `ntfy://` 地址追加 `markdown=yes`）。无需时设为 `false`，或直接在 URL 写 `?markdown=yes` |
+| `NTFY_MARKDOWN` | `true` | ntfy 通知启用 Markdown 渲染（自动为 `ntfy://` 地址追加 `?format=markdown`，使 ntfy 实际渲染 Markdown）。无需时设为 `false` |
 | `BACKUP_VALIDATE` | `true` | 备份完成后校验文件完整：完整解压并检查 dump 头部标识与完成标记，异常时丢弃该备份并报错 |
 | `KOPIA_REPOSITORY_TYPE` | `-` | 启用 Kopia 快照以进行异地备份。仓库类型：`filesystem`（本地路径，配合 `--path=`）、`s3`（配合 `--bucket=` 等）；若使用旧名称 `posix` 会被自动映射为 `filesystem` |
 | `KOPIA_PASSWORD` | `-` | Kopia 仓库加密密码（必填，用于创建或连接仓库） |
@@ -62,14 +62,16 @@
 
 备份完成后可通过 [apprise-go](https://github.com/unraid/apprise-go) 发送通知到多种渠道，如 Slack、Discord、Telegram、邮件、ntfy 等。
 
-`SHOUTRRR_URLS` 为逗号分隔的 Apprise URL 列表，例如：
+`NOTIFY_URLS` 为逗号分隔的 Apprise URL 列表，例如：
 
 ```yml
 environment:
-  - SHOUTRRR_URLS=slack://token-a/token-b/token-c
+  - NOTIFY_URLS=slack://token-a/token-b/token-c
 ```
 
-通知正文以 Markdown 格式发送。支持 Markdown 的渠道（如 Slack、Discord、Telegram 等）会自动渲染嵌套列表，清晰展示每个容器下备份的子库明细。
+通知正文以 Markdown 格式发送。支持 Markdown 的渠道（如 ntfy、Slack、Discord、Telegram 等）会自动渲染嵌套列表，清晰展示每个容器下备份的子库明细。
+
+ntfy 的 Markdown 渲染由 Apprise 的 `?format=markdown` 控制（本项目在 `NTFY_MARKDOWN=true` 时自动为 `ntfy://` 地址追加该参数）。请勿在 URL 中使用 `?markdown=yes` —— apprise-go 会忽略它，导致消息以纯文本发送、且 Markdown 在转换过程中被损坏。
 
 Apprise 支持多种通知渠道，URL 格式见 [apprise-go 文档](https://github.com/unraid/apprise-go)。
 
@@ -93,7 +95,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./backups:/var/backups
     environment:
-      - SHOUTRRR_URLS=slack://token-a/token-b/token-c
+      - NOTIFY_URLS=slack://token-a/token-b/token-c
       - SINGLE_DB_MODE=true
 ```
 

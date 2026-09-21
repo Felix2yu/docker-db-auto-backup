@@ -127,9 +127,9 @@ func backup(ctx context.Context, cfg *config, dc *dockerClient, runAt time.Time)
 
 	tree := formatTree(results)
 
-	if len(cfg.shoutrrrURLs) > 0 {
-		notifyShoutrrr(ctx, cfg, cfg.shoutrrrURLs,
-			fmt.Sprintf("成功备份 %d 个容器，耗时 %s。\n\n已备份容器:\n%s",
+	if len(cfg.notifyURLs) > 0 {
+		notify(ctx, cfg, cfg.notifyURLs,
+			fmt.Sprintf("成功备份 %d 个容器，耗时 %s。\n\n**已备份容器：**\n\n%s",
 				len(results), durationStr, tree))
 	}
 

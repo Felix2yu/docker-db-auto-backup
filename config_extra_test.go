@@ -116,7 +116,7 @@ func TestLoadConfigValues(t *testing.T) {
 	t.Setenv("SCHEDULE", "0 0 * * *")
 	t.Setenv("COMPRESSION", "GZIP")
 	t.Setenv("SINGLE_DB_MODE", "true")
-	t.Setenv("SHOUTRRR_URLS", "ntfy://example.com/a, slack://x")
+	t.Setenv("NOTIFY_URLS", "ntfy://example.com/a, slack://x")
 	t.Setenv("HEALTHCHECKS_URL", "https://hc.example.com/ping")
 	t.Setenv("BACKUP_RETENTION_DAYS", "14")
 	t.Setenv("BACKUP_WORKERS", "4")
@@ -138,8 +138,8 @@ func TestLoadConfigValues(t *testing.T) {
 	if !cfg.singleDBMode {
 		t.Error("SINGLE_DB_MODE 应为 true")
 	}
-	if len(cfg.shoutrrrURLs) != 2 {
-		t.Errorf("SHOUTRRR_URLS 应解析为 2 个, got %v", cfg.shoutrrrURLs)
+	if len(cfg.notifyURLs) != 2 {
+		t.Errorf("NOTIFY_URLS 应解析为 2 个, got %v", cfg.notifyURLs)
 	}
 	if cfg.healthchecksURL != "https://hc.example.com/ping" {
 		t.Errorf("HEALTHCHECKS_URL = %q", cfg.healthchecksURL)

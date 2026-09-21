@@ -78,7 +78,7 @@ func TestBackupWithContainerAndHealthchecks(t *testing.T) {
 	}
 }
 
-func TestBackupWithShoutrrrError(t *testing.T) {
+func TestBackupWithNotifyError(t *testing.T) {
 	fake, cid := makePostgresFake()
 	fake.containers = []container.Summary{{ID: cid, Names: []string{"/pg"}}}
 	dc := newFakeDockerClient(fake)
@@ -86,10 +86,10 @@ func TestBackupWithShoutrrrError(t *testing.T) {
 		backupDir:      t.TempDir(),
 		compression:    "plain",
 		backupValidate: true,
-		shoutrrrURLs:   []string{"http://127.0.0.1:1/unreachable"},
+		notifyURLs:     []string{"http://127.0.0.1:1/unreachable"},
 	}
 	if err := backup(context.Background(), cfg, dc, time.Now()); err != nil {
-		t.Fatalf("shoutrrr 失败不应影响 backup: %v", err)
+		t.Fatalf("notify 失败不应影响 backup: %v", err)
 	}
 }
 

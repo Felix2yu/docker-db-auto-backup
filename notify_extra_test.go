@@ -7,16 +7,16 @@ import (
 	"testing"
 )
 
-func TestNotifyShoutrrrEmpty(t *testing.T) {
+func TestNotifyEmpty(t *testing.T) {
 	cfg := &config{ntfyMarkdown: true}
-	notifyShoutrrr(context.Background(), cfg, nil, "body")
-	notifyShoutrrr(context.Background(), cfg, []string{"  ", ""}, "body")
+	notify(context.Background(), cfg, nil, "body")
+	notify(context.Background(), cfg, []string{"  ", ""}, "body")
 }
 
-func TestNotifyShoutrrrFailure(t *testing.T) {
+func TestNotifyFailure(t *testing.T) {
 	cfg := &config{ntfyMarkdown: true}
 	// 使用不可达地址触发发送失败分支
-	notifyShoutrrr(context.Background(), cfg, []string{"http://127.0.0.1:1/does-not-exist"}, "body")
+	notify(context.Background(), cfg, []string{"http://127.0.0.1:1/does-not-exist"}, "body")
 }
 
 func TestHcPingGet(t *testing.T) {
