@@ -164,7 +164,8 @@ func dumpHandler(cmd []string) (stdout, stderr []byte, exit int) {
 		// psql -t -A -c "SELECT datname ..." 列出数据库
 		return []byte("appdb\npostgres\ntemplate1\n"), nil, 0
 	case strings.Contains(c, "SELECT SCHEMA_NAME"):
-		return []byte("appdb\nmysql\n"), nil, 0
+		// 真实 MariaDB/MySQL 的库列表（含 information_schema / performance_schema）
+		return []byte("appdb\ninformation_schema\nmysql\nperformance_schema\nsys\n"), nil, 0
 	}
 	return nil, nil, 0
 }

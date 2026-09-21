@@ -226,6 +226,13 @@ func TestMysqlSingleDB(t *testing.T) {
 	if !found {
 		t.Error("mysql 系统库应被纳入备份（恢复到新实例需要账号与权限）")
 	}
+	// information_schema / performance_schema 是内存虚拟库，mysqldump 无法备份，
+	// 强行 dump 只会因 LOCK TABLES 权限（1044 / 1142）失败。
+	for _, d := range dbs {
+		if d.name == "information_schema" || d.name == "performance_schema" {
+			t.Errorf("不可备份的系统库 %s 应被跳过", d.name)
+		}
+	}
 }
 
 func TestMysqlSingleDBErrors(t *testing.T) {

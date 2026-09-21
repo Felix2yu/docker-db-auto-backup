@@ -36,6 +36,15 @@ var systemDatabasesMySQL = map[string]bool{
 	"sys":                true,
 }
 
+// nonDumpableMySQLSchemas 是 mysqldump 无法备份的库：
+// information_schema 与 performance_schema 都是内存态虚拟表，
+// mysqldump 自身的 --all-databases 也会跳过它们；单库模式下若逐个 dump，
+// 只会因 LOCK TABLES 权限不足（1044 / 1142）而失败并污染备份结果。
+var nonDumpableMySQLSchemas = map[string]bool{
+	"information_schema": true,
+	"performance_schema": true,
+}
+
 // safeDBName 限制可写入文件名的数据库名（C12），防止含路径分隔符导致的路径穿越。
 var safeDBName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
@@ -201,6 +210,10 @@ func mysqlSingleDB(ctx context.Context, cfg *config, dc *dockerClient, container
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
+			continue
+		}
+		if nonDumpableMySQLSchemas[line] {
+			logDebug("跳过不可备份的系统库", "container", containerID, "database", line)
 			continue
 		}
 		// C9：与 PostgreSQL 行为对齐——系统库同样备份，只是落到 system/ 子目录，
