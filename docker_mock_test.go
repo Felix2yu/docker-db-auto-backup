@@ -158,8 +158,8 @@ func dumpHandler(cmd []string) (stdout, stderr []byte, exit int) {
 	case strings.Contains(c, "CONFIG GET dbfilename"):
 		return []byte("dbfilename\ndump.rdb\n"), nil, 0
 	case strings.Contains(c, "redis-cli") || strings.Contains(c, "valkey-cli"):
-		// RDB 约定以 0xFF 结束
-		return []byte("REDIS0011\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff"), nil, 0
+		// 真实 RDB 布局：0xFF 结束标记 + 8 字节 CRC64（rdbchecksum 默认开启）
+		return []byte("REDIS0011\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\x01\x02\x03\x04\x05\x06\x07\x08"), nil, 0
 	case strings.Contains(c, "psql"):
 		// psql -t -A -c "SELECT datname ..." 列出数据库
 		return []byte("appdb\npostgres\ntemplate1\n"), nil, 0

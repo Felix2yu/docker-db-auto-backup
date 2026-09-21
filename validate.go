@@ -135,10 +135,29 @@ func checkBackupStructure(head, tail []byte, total int64, fileExt string) error 
 			!strings.HasPrefix(string(head), "VALKE") {
 			return errors.New("RDB 备份缺少有效的魔数")
 		}
-		// RDB 约定以 0xFF 结束，缺失说明文件被截断。
-		if len(tail) > 0 && tail[len(tail)-1] != 0xFF {
+		// RDB 约定以 0xFF（EOF opcode）结束。默认 rdbchecksum=yes 时其后还跟 8 字节
+		// CRC64，故 0xFF 位于倒数第 9 字节；关闭校验和时它才是最后一个字节。
+		// 两种布局都要接受，否则开启校验和的真实 Redis 会被误判为截断。
+		if !rdbHasEOFMarker(tail) {
 			return errors.New("RDB 备份缺少结束标记 0xFF，可能被截断")
 		}
 	}
 	return nil
+}
+
+// rdbHasEOFMarker 在文件尾部查找 RDB 的 0xFF 结束标记。
+// tail 是文件末尾的一段数据（其最后一个字节即文件的最后一个字节）。
+func rdbHasEOFMarker(tail []byte) bool {
+	if len(tail) == 0 {
+		return false
+	}
+	last := len(tail) - 1
+	// 0xFF 距文件末尾的偏移：带 CRC64 为 8，不带校验和为 0。
+	for _, back := range []int{8, 0} {
+		idx := last - back
+		if idx >= 0 && tail[idx] == 0xFF {
+			return true
+		}
+	}
+	return false
 }

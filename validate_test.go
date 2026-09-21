@@ -56,12 +56,26 @@ func TestValidateBackupContentSQLVariants(t *testing.T) {
 }
 
 func TestValidateBackupRDB(t *testing.T) {
-	// RDB 约定以 0xFF 作为结束标记
-	if err := validateBackupContent(strings.NewReader("REDIS0015....\xff"), "rdb"); err != nil {
-		t.Errorf("valid redis rdb rejected: %v", err)
+	// RDB 以 0xFF（EOF opcode）结束；默认 rdbchecksum=yes 时其后跟 8 字节 CRC64，
+	// 因此真实 Redis 的末字节并不是 0xFF。两种布局都必须通过校验。
+	cases := map[string]string{
+		"无校验和":           "REDIS0015....\xff",
+		"带 CRC64":        "REDIS0015....\xff\x01\x02\x03\x04\x05\x06\x07\x08",
+		"valkey 无校验和":    "VALKE0015....\xff",
+		"valkey 带 CRC64": "VALKE0015....\xff\x08\x07\x06\x05\x04\x03\x02\x01",
 	}
-	if err := validateBackupContent(strings.NewReader("VALKE0015....\xff"), "rdb"); err != nil {
-		t.Errorf("valid valkey rdb rejected: %v", err)
+	for name, content := range cases {
+		if err := validateBackupContent(strings.NewReader(content), "rdb"); err != nil {
+			t.Errorf("%s: valid rdb rejected: %v", name, err)
+		}
+	}
+}
+
+// TestValidateBackupRDBTruncated 覆盖：被截断的 RDB（尾部没有 0xFF）必须被拒绝。
+func TestValidateBackupRDBTruncated(t *testing.T) {
+	truncated := "REDIS0015....\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09"
+	if err := validateBackupContent(strings.NewReader(truncated), "rdb"); err == nil {
+		t.Error("truncated rdb should fail validation")
 	}
 }
 
