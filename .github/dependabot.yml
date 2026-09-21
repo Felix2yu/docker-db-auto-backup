@@ -4,7 +4,8 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "friday"
       time: "00:00"
       timezone: "UTC"
     open-pull-requests-limit: 10
@@ -13,7 +14,8 @@ updates:
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "friday"
       time: "00:00"
       timezone: "UTC"
     open-pull-requests-limit: 10
@@ -22,7 +24,8 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "friday"
       time: "00:00"
       timezone: "UTC"
     open-pull-requests-limit: 10
