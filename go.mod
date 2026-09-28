@@ -8,7 +8,7 @@ require (
 	github.com/moby/moby/client v0.6.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/schollz/progressbar/v3 v3.19.1
-	github.com/ulikunitz/xz v0.5.16
+	github.com/ulikunitz/xz v0.5.17
 	github.com/unraid/apprise-go v0.3.3
 	golang.org/x/term v0.46.0
 )
