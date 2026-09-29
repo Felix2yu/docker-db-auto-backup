@@ -58,5 +58,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      # Dockerfile 只做装配，compose 构建前必须先编译出二进制
+      - run: mkdir -p bin && CGO_ENABLED=0 go build -trimpath -o bin/db-auto-backup .
       - run: docker compose build && docker compose pull
       - run: ./scripts/test.sh
