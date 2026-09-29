@@ -1,43 +1,62 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v7
-    - uses: actions/setup-go@v7
-      with:
-        go-version: "1.27"
-    - name: Lint
-      run: ./scripts/lint.sh
-
   test:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v7
-    - uses: actions/setup-go@v7
-      with:
-        go-version: "1.27"
-    - name: Run tests with coverage
-      run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v7
-      with:
-        files: ./coverage.out
-        fail_ci_if_error: false
+    uses: Felix2yu/.github/.github/workflows/reusable-test.yml@v1
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      go-dir: .
+      test-packages: ./...
+      test-flags: -race -covermode=atomic
 
-  e2e-test:
-    runs-on: ubuntu-latest
+  image:
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+    uses: Felix2yu/.github/.github/workflows/reusable-image.yml@v1
+    with:
+      go-dir: .
+      binary-name: db-auto-backup
+      image-name: ghcr.io/felix2yu/docker-db-auto-backup
+
+  # 仓库特有的检查不进公共 workflow，留在本地
+  lint:
+    runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v7
-    - uses: actions/setup-go@v7
-      with:
-        go-version: "1.27"
-    - name: Unit tests
-      run: go test ./...
-    - name: Fetch containers
-      run: docker compose build && docker compose pull
-    - name: Run e2e test
-      run: ./scripts/test.sh
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: ./scripts/lint.sh
+
+  e2e:
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: docker compose build && docker compose pull
+      - run: ./scripts/test.sh

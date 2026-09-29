@@ -1,16 +1,5 @@
-FROM golang:1.27-alpine AS build
-
-ARG GOPROXY=https://proxy.golang.org,direct
-ENV GOPROXY=$GOPROXY
-
-WORKDIR /src
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/db-auto-backup .
-
+# 运行时镜像：主程序由 CI 预编译并下载到 bin/ 后拼装。
+# 保留 kopia 阶段——它需要按 TARGETARCH 从上游下载对应架构的二进制。
 FROM alpine:3.24 AS kopia
 
 ARG TARGETARCH
@@ -36,7 +25,7 @@ ENV SCHEDULE="0 0 * * *" TZ=Asia/Shanghai
 RUN apk add --no-cache tzdata ca-certificates \
  && mkdir -p /var/backups
 
-COPY --from=build /out/db-auto-backup /usr/local/bin/db-auto-backup
+COPY --chmod=755 bin/db-auto-backup /usr/local/bin/db-auto-backup
 COPY --from=kopia /out/kopia /usr/local/bin/kopia
 
 CMD ["db-auto-backup"]
