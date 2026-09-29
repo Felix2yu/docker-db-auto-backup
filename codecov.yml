@@ -1,0 +1,35 @@
+# Codecov 统一配置 —— 规范由 Felix2yu/.github 维护，各仓库仅 paths 不同。
+codecov:
+  require_ci_to_pass: true
+
+coverage:
+  precision: 1
+  round: down
+  status:
+    project:
+      default:
+        target: auto          # 存量基线：避免历史欠账一次性打红所有 PR
+        threshold: 1%
+        informational: true   # 稳定后再去掉 informational，转为硬门禁
+    patch:
+      default:
+        target: 80%           # 新增代码必须基本被测到
+        threshold: 5%
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: true
+
+ignore:
+  - "**/*_test.go"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/node_modules/**"
+  - "docs/**"
+  - "scripts/**"
+
+flags:
+  backend:
+    paths:
+      - **/*.go
+    carryforward: true
