@@ -40,7 +40,7 @@ jobs:
 
   # 仓库特有的检查不进公共 workflow，留在本地
   lint:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -50,7 +50,7 @@ jobs:
       - run: ./scripts/lint.sh
 
   e2e:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: test
     steps:
       - uses: actions/checkout@v7
