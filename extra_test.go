@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +109,9 @@ func TestFileExtFromName(t *testing.T) {
 		"rd.rdb":     "rdb",
 		"rd.rdb.bz2": "rdb",
 		"/a/b/c.sql": "sql",
+		"noext":      "",
+		// 只剥 .gz/.xz/.bz2，多套一层就露出内层扩展名
+		"pg.sql.tar.gz": "tar",
 	}
 	for in, want := range cases {
 		if got := fileExtFromName(in); got != want {
@@ -248,5 +252,74 @@ func TestFindPreviousManifest(t *testing.T) {
 	prev, err := findPreviousManifest(dir, "2026-09-21")
 	if err != nil || prev == nil || prev.Date != "2026-09-20" {
 		t.Errorf("应跳过无清单的日期并取最近一次: %+v %v", prev, err)
+	}
+}
+
+// 识别文件的每一条降级路径都要只影响这一条规则，不能整份配置作废。
+func TestLoadExtraProvidersErrorPaths(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := loadExtraProviders(filepath.Join(dir, "missing.json")); err == nil {
+		t.Error("文件不存在时应返回错误")
+	}
+	bad := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(bad, []byte("{不是 JSON"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadExtraProviders(bad); err == nil {
+		t.Error("解析失败时应返回错误")
+	}
+
+	// 空 pattern、未知 provider 应被跳过；省略 provider 时落到 custom
+	mixed := filepath.Join(dir, "mixed.json")
+	content := `{"patterns":[
+	  {"pattern":"","provider":"postgres"},
+	  {"pattern":"myorg/unknown","provider":"nosuchdb"},
+	  {"pattern":"myorg/mydb","command":["mydump"],"fileExt":"dat"}
+	]}`
+	if err := os.WriteFile(mixed, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := len(providers)
+	if err := loadExtraProviders(mixed); err != nil {
+		t.Fatalf("部分规则无效不应整体失败: %v", err)
+	}
+	if len(providers) != before+1 {
+		t.Errorf("应只新增 1 个自定义 provider: %d -> %d", before, len(providers))
+	}
+	p := providerByName("custom")
+	if p == nil || p.fileExt != "dat" {
+		t.Fatalf("自定义 provider 未按预期注册: %+v", p)
+	}
+	cmd, env, err := p.backupMethod(context.Background(), nil, nil, "c1")
+	if err != nil || env != nil || strings.Join(cmd, " ") != "mydump" {
+		t.Errorf("自定义命令 = %v %v, err=%v", cmd, env, err)
+	}
+
+	t.Cleanup(func() {
+		providers = providers[:before]
+	})
+}
+
+// 同名 provider 的规则应合并而不是重复注册。
+func TestLoadExtraProvidersMergesIntoExistingProvider(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "p.json")
+	content := `{"patterns":[{"pattern":"myorg/postgres-fork","provider":"postgres"}]}`
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := len(providers)
+	if err := loadExtraProviders(f); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { providers = providers[:before] })
+
+	if len(providers) != before {
+		t.Errorf("追加规则不应新增 provider: %d -> %d", before, len(providers))
+	}
+	p := providerByName("postgres")
+	if getBackupProvider([]string{"myorg/postgres-fork"}) != p {
+		t.Error("新 pattern 应命中内置 postgres provider")
 	}
 }

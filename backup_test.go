@@ -285,7 +285,9 @@ func TestSelectContainers(t *testing.T) {
 }
 
 func TestProgressWriter(t *testing.T) {
-	bar := progressbar.NewOptions64(-1, progressbar.OptionSetWriter(os.Stderr), progressbar.OptionShowCount())
+	bar := progressbar.NewOptions64(-1, progressbar.OptionSetWriter(io.Discard), progressbar.OptionShowCount())
+	// 不 Close 的话后台刷新协程会一直写输出，把后续所有测试的日志都糊上进度条字符
+	defer bar.Close()
 	pw := &progressWriter{w: io.Discard, bar: bar}
 	n, err := pw.Write([]byte("hello"))
 	if err != nil || n != 5 {

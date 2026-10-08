@@ -66,24 +66,36 @@ type execResult struct {
 // 但我们的测试不会触达它们。
 type fakeAPIClient struct {
 	client.APIClient
-	containers  []container.Summary
-	inspect     map[string]container.InspectResponse
-	imageTags   map[string][]string
-	execHandler func(cmd []string) (stdout, stderr []byte, exitCode int)
-	execs       map[string]*execResult
-	seq         int
-	listErr     error
+	containers   []container.Summary
+	inspect      map[string]container.InspectResponse
+	imageTags    map[string][]string
+	imageDigests map[string][]string
+	execHandler  func(cmd []string) (stdout, stderr []byte, exitCode int)
+	execs        map[string]*execResult
+	seq          int
+	listErr      error
 
 	// attachReader/attachConn 覆盖 ExecAttach 返回的流，用于测试"读取挂住"的场景。
 	attachReader *bufio.Reader
 	attachConn   net.Conn
 
 	// 恢复演练用的调用记录
-	created    []client.ContainerCreateOptions
-	started    []string
-	removeOpts []client.ContainerRemoveOptions
-	copyDest   []string
-	createErr  error
+	created     []client.ContainerCreateOptions
+	started     []string
+	removeOpts  []client.ContainerRemoveOptions
+	copyDest    []string
+	copyContent []byte
+	createErr   error
+	startErr    error
+	copyErr     error
+	removeErr   error
+
+	// 各类调用的失败注入，用于覆盖错误分支
+	inspectErr      error
+	imageInspectErr error
+	execCreateErr   error
+	execAttachErr   error
+	execInspectErr  error
 }
 
 func newFakeAPIClient() *fakeAPIClient {
@@ -105,6 +117,9 @@ func (f *fakeAPIClient) ContainerList(ctx context.Context, opts client.Container
 }
 
 func (f *fakeAPIClient) ContainerInspect(ctx context.Context, id string, opts client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+	if f.inspectErr != nil {
+		return client.ContainerInspectResult{}, f.inspectErr
+	}
 	ins, ok := f.inspect[id]
 	if !ok {
 		return client.ContainerInspectResult{}, fmt.Errorf("fake: 找不到容器 %s 的 inspect 数据", id)
@@ -113,16 +128,25 @@ func (f *fakeAPIClient) ContainerInspect(ctx context.Context, id string, opts cl
 }
 
 func (f *fakeAPIClient) ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error) {
+	if f.imageInspectErr != nil {
+		return client.ImageInspectResult{}, f.imageInspectErr
+	}
 	tags := f.imageTags[imageID]
 	if tags == nil {
 		tags = []string{imageID}
 	}
 	r := client.ImageInspectResult{}
 	r.RepoTags = tags
+	if f.imageDigests != nil {
+		r.RepoDigests = f.imageDigests[imageID]
+	}
 	return r, nil
 }
 
 func (f *fakeAPIClient) ExecCreate(ctx context.Context, id string, opts client.ExecCreateOptions) (client.ExecCreateResult, error) {
+	if f.execCreateErr != nil {
+		return client.ExecCreateResult{}, f.execCreateErr
+	}
 	f.seq++
 	eid := fmt.Sprintf("exec-%d", f.seq)
 	stdout, stderr, exit := f.execHandler(opts.Cmd)
@@ -131,6 +155,9 @@ func (f *fakeAPIClient) ExecCreate(ctx context.Context, id string, opts client.E
 }
 
 func (f *fakeAPIClient) ExecAttach(ctx context.Context, eid string, opts client.ExecAttachOptions) (client.ExecAttachResult, error) {
+	if f.execAttachErr != nil {
+		return client.ExecAttachResult{}, f.execAttachErr
+	}
 	if f.attachReader != nil {
 		conn := f.attachConn
 		if conn == nil {
@@ -164,21 +191,37 @@ func (f *fakeAPIClient) ContainerCreate(ctx context.Context, opts client.Contain
 }
 
 func (f *fakeAPIClient) ContainerStart(ctx context.Context, id string, opts client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	if f.startErr != nil {
+		return client.ContainerStartResult{}, f.startErr
+	}
 	f.started = append(f.started, id)
 	return client.ContainerStartResult{}, nil
 }
 
 func (f *fakeAPIClient) ContainerRemove(ctx context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.removeOpts = append(f.removeOpts, opts)
+	if f.removeErr != nil {
+		return client.ContainerRemoveResult{}, f.removeErr
+	}
 	return client.ContainerRemoveResult{}, nil
 }
 
 func (f *fakeAPIClient) CopyToContainer(ctx context.Context, id string, opts client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
+	if f.copyErr != nil {
+		return client.CopyToContainerResult{}, f.copyErr
+	}
 	f.copyDest = append(f.copyDest, opts.DestinationPath)
+	if opts.Content != nil {
+		data, _ := io.ReadAll(opts.Content)
+		f.copyContent = data
+	}
 	return client.CopyToContainerResult{}, nil
 }
 
 func (f *fakeAPIClient) ExecInspect(ctx context.Context, eid string, opts client.ExecInspectOptions) (client.ExecInspectResult, error) {
+	if f.execInspectErr != nil {
+		return client.ExecInspectResult{}, f.execInspectErr
+	}
 	res := f.execs[eid]
 	exit := 0
 	if res != nil {
