@@ -51,6 +51,13 @@ type fakeAPIClient struct {
 	execs       map[string]*execResult
 	seq         int
 	listErr     error
+
+	// 恢复演练用的调用记录
+	created    []client.ContainerCreateOptions
+	started    []string
+	removeOpts []client.ContainerRemoveOptions
+	copyDest   []string
+	createErr  error
 }
 
 func newFakeAPIClient() *fakeAPIClient {
@@ -111,6 +118,29 @@ func (f *fakeAPIClient) ExecAttach(ctx context.Context, eid string, opts client.
 			Conn:   dummyConn{},
 		},
 	}, nil
+}
+
+func (f *fakeAPIClient) ContainerCreate(ctx context.Context, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	if f.createErr != nil {
+		return client.ContainerCreateResult{}, f.createErr
+	}
+	f.created = append(f.created, opts)
+	return client.ContainerCreateResult{ID: "drill-1"}, nil
+}
+
+func (f *fakeAPIClient) ContainerStart(ctx context.Context, id string, opts client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	f.started = append(f.started, id)
+	return client.ContainerStartResult{}, nil
+}
+
+func (f *fakeAPIClient) ContainerRemove(ctx context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+	f.removeOpts = append(f.removeOpts, opts)
+	return client.ContainerRemoveResult{}, nil
+}
+
+func (f *fakeAPIClient) CopyToContainer(ctx context.Context, id string, opts client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
+	f.copyDest = append(f.copyDest, opts.DestinationPath)
+	return client.CopyToContainerResult{}, nil
 }
 
 func (f *fakeAPIClient) ExecInspect(ctx context.Context, eid string, opts client.ExecInspectOptions) (client.ExecInspectResult, error) {

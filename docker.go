@@ -110,6 +110,24 @@ func (dc *dockerClient) containerImageNames(ctx context.Context, containerID str
 	return names, nil
 }
 
+// containerImageRef 返回容器实际运行的镜像引用，优先用镜像 ID（摘要）——
+// 它与 provider 识别用的仓库名不同，能保证"演练恢复的就是源容器那一个版本"。
+func (dc *dockerClient) containerImageRef(ctx context.Context, containerID string) (string, error) {
+	inspect, err := dc.api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
+	if err != nil {
+		return "", err
+	}
+	if id := inspect.Container.Image; id != "" {
+		return id, nil
+	}
+	if inspect.Container.Config != nil {
+		if ref := inspect.Container.Config.Image; ref != "" {
+			return ref, nil
+		}
+	}
+	return "", fmt.Errorf("容器 %s 无法确定镜像", containerID)
+}
+
 // containerBackupProviderLabel 读取容器上显式声明的 provider（如 backup.provider=postgres）。
 func (dc *dockerClient) containerBackupProviderLabel(ctx context.Context, containerID string) string {
 	inspect, err := dc.api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})

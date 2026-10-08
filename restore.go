@@ -82,11 +82,12 @@ func pickDrillFile(cfg *config, c containerManifest) string {
 }
 
 func drillRestore(ctx context.Context, cfg *config, dc *dockerClient, plan *containerPlan, dumpFile string) error {
-	names, err := dc.containerImageNames(ctx, plan.c.ID)
-	if err != nil || len(names) == 0 {
-		return fmt.Errorf("无法确定基础镜像: %v", err)
+	// 必须用容器实际的镜像引用：仓库名不带 tag，拿它建演练容器会退化成 :latest，
+	// 验的就不是源库那个版本了（timescale / pgvecto-rs 这类还常因为没有 latest tag 而直接创建失败）。
+	image, err := dc.containerImageRef(ctx, plan.c.ID)
+	if err != nil {
+		return fmt.Errorf("无法确定基础镜像: %w", err)
 	}
-	image := names[0]
 
 	env, envErr := dc.containerEnv(ctx, plan.c.ID)
 	if envErr != nil {
@@ -104,7 +105,11 @@ func drillRestore(ctx context.Context, cfg *config, dc *dockerClient, plan *cont
 	}
 	containerID := created.ID
 	defer func() {
-		if _, err := dc.api.ContainerRemove(context.Background(), containerID, client.ContainerRemoveOptions{Force: true}); err != nil {
+		// 镜像都声明了数据卷，不显式移除的话每次演练都会留下一个匿名卷，长期把宿主存储吃满。
+		if _, err := dc.api.ContainerRemove(context.Background(), containerID, client.ContainerRemoveOptions{
+			Force:         true,
+			RemoveVolumes: true,
+		}); err != nil {
 			logWarn("清理演练容器失败", "container", containerID, "error", err)
 		}
 	}()
