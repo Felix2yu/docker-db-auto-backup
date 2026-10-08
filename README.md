@@ -234,7 +234,9 @@ ntfy 的 Markdown 渲染由 Apprise 的 `?format=markdown` 控制（本项目在
 
 ## Redis / Valkey 备份说明
 
-Redis 使用 `BGSAVE`（后台异步落盘）而非同步 `SAVE`，不会阻塞 Redis 主线程；随后轮询 `INFO persistence` 等待落盘完成，超时（120 秒）则判定失败而不是备份一个陈旧文件。RDB 路径通过 `CONFIG GET dir` / `CONFIG GET dbfilename` 动态获取，不再硬编码 `/data/dump.rdb`。
+Redis 使用 `BGSAVE`（后台异步落盘）而非同步 `SAVE`，不会阻塞 Redis 主线程；随后轮询 `INFO persistence` 等待落盘完成，超时（120 秒）则判定失败。
+
+等待结束并不等于拿到了新快照：BGSAVE 因磁盘满或 fork 失败而没真正落盘时，`rdb_bgsave_in_progress` 同样会立刻归零，而 Redis 只在成功时才把临时文件改名成 `dbfilename`，盘上留的是**上一次成功保存的旧 RDB**——魔数与结束标记都合法，光看文件内容分辨不出来。因此脚本还会核对 `rdb_last_bgsave_status` 不为 `err`、且 `rdb_last_save_time` 相比本次备份开始前确实前进了（除非本来就没有未落盘的改动），否则判定失败并拒绝交付陈旧文件。RDB 路径通过 `CONFIG GET dir` / `CONFIG GET dbfilename` 动态获取，不再硬编码 `/data/dump.rdb`。
 
 ## 示例 docker-compose.yml
 

@@ -107,18 +107,43 @@ func mysqlBackupCommand(ctx context.Context, cfg *config, dc *dockerClient, cont
 	return cmd, []string{"MYSQL_PWD=" + password}, nil
 }
 
+// redisBGSaveScript 用 BGSAVE 异步落盘（C3），再轮询等待完成。
+//
+// 只等 rdb_bgsave_in_progress 归零防不住陈旧数据：BGSAVE 启动失败（磁盘满、fork 失败）时该标志同样
+// 立刻为 0，而 Redis 只在成功时把临时文件 rename 成 dbfilename，于是 cat 到的是上一次成功保存的旧 RDB——
+// 魔数和结束标记都合法，校验通得过，却静默交付了一份陈旧备份。这里再加两道证据：
+// 状态不得为 err，且 rdb_last_save_time 相比本次开始前确实前进了（除非本来就没有任何未落盘改动）。
+const redisBGSaveScript = `before=$(%[1]s INFO persistence | grep -o 'rdb_last_save_time:[0-9]*' | cut -d: -f2)
+%[1]s BGSAVE > /dev/null
+sleep 1
+i=0
+while [ "$i" -lt %[2]d ]; do
+  if %[1]s INFO persistence | grep -q 'rdb_bgsave_in_progress:0'; then break; fi
+  i=$((i+1))
+  sleep 1
+done
+if [ "$i" -ge %[2]d ]; then echo 'BGSAVE 超时未完成' >&2; exit 1; fi
+info=$(%[1]s INFO persistence)
+case "$info" in
+  *rdb_last_bgsave_status:err*) echo 'BGSAVE 执行失败：rdb_last_bgsave_status:err，盘上是上一次保存的旧 RDB' >&2; exit 1 ;;
+esac
+after=$(printf '%%s\n' "$info" | grep -o 'rdb_last_save_time:[0-9]*' | cut -d: -f2)
+changes=$(printf '%%s\n' "$info" | grep -o 'rdb_changes_since_last_save:[0-9]*' | cut -d: -f2)
+if [ "$after" = "$before" ] && [ "$changes" != "0" ]; then
+  echo 'BGSAVE 未产生新的 RDB（磁盘满或 fork 失败？），拒绝备份陈旧文件' >&2
+  exit 1
+fi
+cat %[3]s
+`
+
 func redisBackupCommand(ctx context.Context, cfg *config, dc *dockerClient, containerID string) ([]string, []string, error) {
 	cli := "redis-cli"
 	if ok, err := dc.hasBinary(ctx, containerID, "valkey-cli"); err == nil && ok {
 		cli = "valkey-cli"
 	}
 	rdbPath := redisRDBPath(ctx, dc, containerID, cli)
-	// C3：用 BGSAVE 替代同步 SAVE，避免阻塞 Redis 主线程；
-	// 再轮询 INFO persistence 等待落盘完成，超时则报错而不是备份一个陈旧文件。
 	// BGSAVE 后的 sleep 1 用于规避"命令已发出但标志位尚未置 1"的竞态。
-	script := fmt.Sprintf(
-		"%s BGSAVE > /dev/null; sleep 1; i=0; while [ $i -lt %d ]; do if %s INFO persistence | grep -q 'rdb_bgsave_in_progress:0'; then break; fi; i=$((i+1)); sleep 1; done; if [ $i -ge %d ]; then echo 'BGSAVE 超时未完成' >&2; exit 1; fi; cat %s",
-		cli, redisBGSaveTimeoutSeconds, cli, redisBGSaveTimeoutSeconds, shellQuote(rdbPath))
+	script := fmt.Sprintf(redisBGSaveScript, cli, redisBGSaveTimeoutSeconds, shellQuote(rdbPath))
 	return []string{"sh", "-c", script}, nil, nil
 }
 
