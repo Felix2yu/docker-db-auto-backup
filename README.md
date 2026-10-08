@@ -101,6 +101,13 @@ db-auto-backup help
 
 未显式指定时，MySQL 会依次尝试容器内的 `MARIADB_ROOT_PASSWORD`、`MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`；**找不到密码时直接报错**，不会退化成交互式等待输入（否则会永久挂起）。密码通过 `MYSQL_PWD` 环境变量注入，不出现在命令行中。
 
+导出命令固定带 `--single-transaction --routines --events`：
+
+- `--single-transaction` 让 InnoDB 拿到跨表一致快照，同时关掉 mysqldump 默认的锁表行为（不加会在备份期间阻塞线上写入）。需要 `RELOAD`（或 `CONNECTION ADMIN`）与 `TRANSACTION` 权限，且只对事务引擎保证一致性。
+- `--routines` / `--events` 默认是**关闭**的，不加就会静默漏掉存储过程、函数和定时事件——dump 文件依然合法，校验和恢复演练都发现不了，只有恢复之后才暴露。需要 `SELECT` on `mysql.*`、`SHOW VIEW` 与 `EVENT`。
+
+用只读备份专用账号时，请一并授予上述权限，否则会因权限不足报错。
+
 ### 通知与监控
 
 | 变量 | 默认值 | 说明 |
@@ -171,6 +178,8 @@ db-auto-backup help
 单库模式下各库也会进入并发队列，不会串行等待。枚举失败时自动回退为全库备份，并在通知中标注"（单库模式回退为全库备份）"。
 
 数据库名只允许 `字母/数字/_/-/.`，含路径分隔符的名称会被跳过，避免路径穿越。
+
+MySQL 单库导出使用 `mysqldump --databases {库名}`，产物自带 `CREATE DATABASE` 与 `USE`，可以直接 `mysql < dump.sql` 导入，无需事先指定目标库（PostgreSQL 的 `pg_dump` 输出本身带 `\connect`）。
 
 ## 备份清单（manifest.json）
 

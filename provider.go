@@ -51,6 +51,12 @@ var safeDBName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 // redisBGSaveTimeoutSeconds 是等待 BGSAVE 完成的上限。
 const redisBGSaveTimeoutSeconds = 120
 
+// mysqlDumpFlags 保证导出的数据既完整又一致：
+// --single-transaction 让 InnoDB 拿到跨表一致快照，同时关掉 mysqldump 默认的锁表（否则会阻塞线上写）；
+// --routines / --events 默认是关闭的，不加就会静默漏掉存储过程、函数和定时事件——dump 文件本身依然合法，
+// 校验和恢复演练都发现不了，只有恢复后才会发现对象不见了。
+const mysqlDumpFlags = "--single-transaction --routines --events"
+
 func getBackupProvider(containerNames []string) *backupProvider {
 	for _, name := range containerNames {
 		for _, provider := range providers {
@@ -97,7 +103,7 @@ func mysqlBackupCommand(ctx context.Context, cfg *config, dc *dockerClient, cont
 	}
 	// C4：密码不再拼进命令行，改由 MYSQL_PWD 环境注入，
 	// 既避免出现在进程列表中，也杜绝了 -p$VAR 展开失败后交互式等待密码的挂死。
-	cmd := []string{"bash", "-c", fmt.Sprintf("%s -u %s --all-databases", binary, shellQuote(user))}
+	cmd := []string{"bash", "-c", fmt.Sprintf("%s -u %s %s --all-databases", binary, shellQuote(user), mysqlDumpFlags)}
 	return cmd, []string{"MYSQL_PWD=" + password}, nil
 }
 
@@ -218,9 +224,10 @@ func mysqlSingleDB(ctx context.Context, cfg *config, dc *dockerClient, container
 		}
 		// C9：与 PostgreSQL 行为对齐——系统库同样备份，只是落到 system/ 子目录，
 		// 避免恢复后丢失 mysql 库中的账号与权限定义。
+		// --databases 让单库产物自带 CREATE DATABASE 与 USE，导入时无需事先指定目标库。
 		dbs = append(dbs, database{
 			name:     line,
-			command:  []string{"bash", "-c", fmt.Sprintf("%s -u %s %s", binary, shellQuote(user), shellQuote(line))},
+			command:  []string{"bash", "-c", fmt.Sprintf("%s -u %s %s --databases %s", binary, shellQuote(user), mysqlDumpFlags, shellQuote(line))},
 			env:      execEnv,
 			isSystem: systemDatabasesMySQL[line],
 		})

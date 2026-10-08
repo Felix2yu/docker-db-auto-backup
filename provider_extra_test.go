@@ -72,6 +72,12 @@ func TestMysqlBackupCommand(t *testing.T) {
 	if !strings.Contains(joined, "mysqldump") || !strings.Contains(joined, "--all-databases") {
 		t.Errorf("unexpected cmd: %v", cmd)
 	}
+	// mysqldump 默认锁表且不导存储过程/事件：不加这几个参数就是"备份成功但数据不一致、对象丢失"
+	for _, flag := range []string{"--single-transaction", "--routines", "--events"} {
+		if !strings.Contains(joined, flag) {
+			t.Errorf("全库导出应带 %s: %v", flag, cmd)
+		}
+	}
 	// C4：密码不得出现在命令行中
 	if strings.Contains(joined, "-p") || strings.Contains(joined, "rootpass") {
 		t.Errorf("密码不应出现在命令行: %v", cmd)
@@ -231,6 +237,19 @@ func TestMysqlSingleDB(t *testing.T) {
 	for _, d := range dbs {
 		if d.name == "information_schema" || d.name == "performance_schema" {
 			t.Errorf("不可备份的系统库 %s 应被跳过", d.name)
+		}
+	}
+	// 单库导出同样要一致性与完整对象；--databases 让产物自带 CREATE DATABASE/USE，
+	// 否则 mysql < dump.sql 会因 "No database selected" 失败（恢复演练即踩此坑）。
+	for _, d := range dbs {
+		joined := strings.Join(d.command, " ")
+		for _, flag := range []string{"--single-transaction", "--routines", "--events", "--databases"} {
+			if !strings.Contains(joined, flag) {
+				t.Errorf("单库 %s 导出应带 %s: %v", d.name, flag, d.command)
+			}
+		}
+		if !strings.Contains(joined, d.name) {
+			t.Errorf("导出命令应包含库名 %s: %v", d.name, d.command)
 		}
 	}
 }
