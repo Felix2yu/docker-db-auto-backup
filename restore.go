@@ -18,9 +18,14 @@ import (
 //
 // 演练失败只作为警告上报，不改变备份本身的成败判定。
 const (
-	drillTimeout      = 10 * time.Minute
-	drillReadyTimeout = 90 * time.Second
-	drillRemotePath   = "/tmp/auto-backup-restore"
+	drillTimeout    = 10 * time.Minute
+	drillRemotePath = "/tmp/auto-backup-restore"
+)
+
+// 就绪等待的两个参数做成变量，测试里不必真的等满 90 秒。
+var (
+	drillReadyTimeout  = 90 * time.Second
+	drillReadyInterval = 2 * time.Second
 )
 
 func runRestoreDrill(ctx context.Context, cfg *config, dc *dockerClient, backupBase string, m *backupManifest, plans []*containerPlan) []string {
@@ -218,7 +223,7 @@ func waitForReady(ctx context.Context, dc *dockerClient, containerID string, cmd
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(drillReadyInterval):
 		}
 	}
 	return fmt.Errorf("演练容器在 %s 内未就绪: %v", drillReadyTimeout, lastErr)
