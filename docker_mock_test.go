@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -32,6 +33,27 @@ type dummyAddr struct{}
 func (dummyAddr) Network() string { return "dummy" }
 func (dummyAddr) String() string  { return "dummy" }
 
+// blockingConn 的 Read 一直阻塞到 Close 被调用，用于模拟"dump 进程挂住不再输出"。
+type blockingConn struct {
+	once sync.Once
+	done chan struct{}
+}
+
+func (c *blockingConn) Read([]byte) (int, error) {
+	<-c.done
+	return 0, net.ErrClosed
+}
+func (c *blockingConn) Write(b []byte) (int, error) { return len(b), nil }
+func (c *blockingConn) Close() error {
+	c.once.Do(func() { close(c.done) })
+	return nil
+}
+func (c *blockingConn) LocalAddr() net.Addr              { return dummyAddr{} }
+func (c *blockingConn) RemoteAddr() net.Addr             { return dummyAddr{} }
+func (c *blockingConn) SetDeadline(time.Time) error      { return nil }
+func (c *blockingConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *blockingConn) SetWriteDeadline(time.Time) error { return nil }
+
 type execResult struct {
 	stdout []byte
 	stderr []byte
@@ -51,6 +73,10 @@ type fakeAPIClient struct {
 	execs       map[string]*execResult
 	seq         int
 	listErr     error
+
+	// attachReader/attachConn 覆盖 ExecAttach 返回的流，用于测试"读取挂住"的场景。
+	attachReader *bufio.Reader
+	attachConn   net.Conn
 
 	// 恢复演练用的调用记录
 	created    []client.ContainerCreateOptions
@@ -105,6 +131,15 @@ func (f *fakeAPIClient) ExecCreate(ctx context.Context, id string, opts client.E
 }
 
 func (f *fakeAPIClient) ExecAttach(ctx context.Context, eid string, opts client.ExecAttachOptions) (client.ExecAttachResult, error) {
+	if f.attachReader != nil {
+		conn := f.attachConn
+		if conn == nil {
+			conn = dummyConn{}
+		}
+		return client.ExecAttachResult{
+			HijackedResponse: client.HijackedResponse{Reader: f.attachReader, Conn: conn},
+		}, nil
+	}
 	res := f.execs[eid]
 	var reader *bufio.Reader
 	if res != nil {

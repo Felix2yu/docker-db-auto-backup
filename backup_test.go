@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"os"
@@ -378,5 +379,39 @@ func TestRunLockPreventsConcurrentRun(t *testing.T) {
 	l1.release()
 	if _, err := acquireRunLock(dir, time.Hour); err != nil {
 		t.Fatalf("释放后应可再次获取: %v", err)
+	}
+}
+
+// A2 回归：hijacked 连接上的读取不受 ctx 影响，超时必须主动关闭连接才能把 StdCopy 叫醒，
+// 否则 dump 挂住时 BACKUP_TIMEOUT 形同虚设，整轮调度会被无限拖住。
+func TestWriteBackupTimeoutInterruptsStalledStream(t *testing.T) {
+	fake := newFakeAPIClient()
+	fake.execHandler = dumpHandler
+	conn := &blockingConn{done: make(chan struct{})}
+	fake.attachReader = bufio.NewReader(conn)
+	fake.attachConn = conn
+	dc := newFakeDockerClient(fake)
+
+	cfg := testBackupConfig(t)
+	cfg.backupTimeout = 100 * time.Millisecond
+	target := filepath.Join(cfg.backupDir, "2026-09-21", "pg.sql")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- writeBackup(context.Background(), cfg, dc, "c1",
+			[]string{"pg_dumpall"}, nil, target, "sql", "pg (postgres)", false)
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "超时") {
+			t.Fatalf("应返回超时错误, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("BACKUP_TIMEOUT 未能中断挂起的输出流")
+	}
+
+	if _, statErr := os.Stat(target); statErr == nil {
+		t.Error("超时产生的半成品不应落盘")
 	}
 }

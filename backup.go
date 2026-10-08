@@ -643,6 +643,11 @@ func writeBackup(ctx context.Context, cfg *config, dc *dockerClient, containerID
 		return fmt.Errorf("创建 exec 失败: %w", err)
 	}
 	defer attach.Close()
+	// hijacked 连接上的读取不受 ctx 影响（moby client 不会随 ctx 关闭连接），
+	// 不在超时时主动关掉它，StdCopy 会一直阻塞在 read 上，BACKUP_TIMEOUT 对
+	// "dump 进程挂住不再输出"这个最主要的卡死场景就是空转。
+	stopOnCancel := context.AfterFunc(execCtx, attach.Close)
+	defer stopOnCancel()
 
 	cw, err := newCompressWriter(tmp, cfg.effectiveCompression())
 	if err != nil {
