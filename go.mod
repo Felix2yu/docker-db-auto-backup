@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/dsnet/compress v0.0.1
-	github.com/moby/moby/api v1.56.0
+	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/schollz/progressbar/v3 v3.19.1
