@@ -1,0 +1,29 @@
+# 编辑器统一配置 —— 契约见 Felix2yu/.github 的 docs/code-style.md
+# 各仓同等一份；改这里之前先改契约，否则下次批量同步会覆盖。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Go 官方格式用 tab，gofmt 不接受空格缩进
+[*.go]
+indent_style = tab
+
+# Makefile 的缩进必须是 tab，否则 recipe 不执行
+[{Makefile,*.mk}]
+indent_style = tab
+
+# Markdown 行尾两个空格是硬换行，不能裁
+[*.{md,markdown}]
+trim_trailing_whitespace = false
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.{json,jsonc,webmanifest}]
+indent_size = 2

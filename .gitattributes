@@ -1,0 +1,42 @@
+# 换行符与二进制判定 —— 契约见 Felix2yu/.github 的 docs/code-style.md
+# 仓库内一律 LF：开发机是 macOS、CI 与容器是 Linux，CRLF 只会在
+# shell 脚本（bad interpreter）和 go:embed 的哈希计算上制造幽灵问题。
+* text=auto eol=lf
+
+# 脚本必须 LF，且要在所有平台上都按 LF 检出
+*.sh text eol=lf
+*.bash text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+
+# 二进制：不参与 diff / merge / 换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.avif binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.mp3 binary
+*.m4a binary
+*.flac binary
+*.mp4 binary
+*.mkv binary
+*.webm binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+
+# GitHub 语言统计：依赖与产物不计入（否则 SvelteKit 仓统计被 dist 带偏）
+**/node_modules/** linguist-vendored
+**/dist/** linguist-generated=true
+**/.svelte-kit/** linguist-generated=true
+go.sum linguist-generated=true
