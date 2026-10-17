@@ -1,0 +1,42 @@
+# Go 静态检查基线 —— 契约见 Felix2yu/.github 的 docs/code-style.md
+# golangci-lint v2 格式（v1 的 linters.enable 写法在这里不生效）。
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  # 不用默认集合，显式列出——默认集合在 v2 里包含大量风格类规则，
+  # 会让存量仓库一次性冒出上百条告警，失去可执行性。
+  default: none
+  enable:
+    - errcheck      # 未处理的 error 返回值
+    - govet         # 官方 vet 检查
+    - ineffassign   # 赋值后从未使用
+    - staticcheck   # 静态分析（含 gosimple / stylecheck 合并后的规则）
+    - unused        # 未使用的标识符
+    - misspell      # 拼写错误
+  settings:
+    errcheck:
+      # 类型断言与空白标识符的 error 属于有意忽略，不算缺陷
+      check-type-assertions: false
+      check-blank: false
+    staticcheck:
+      checks:
+        # all 里包含 SA（缺陷）、S（简化）、ST（命名风格）、QF（快速修复建议）。
+        # QF 是"可以这样写得更短"的提示，对存量代码是纯噪音，排掉。
+        - all
+        - -QF*
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
