@@ -22,6 +22,55 @@ linters:
       # 类型断言与空白标识符的 error 属于有意忽略，不算缺陷
       check-type-assertions: false
       check-blank: false
+      # 只排「错误确实无处安放」的类别，不排业务返回值：
+      #   写响应/流：响应头一旦发出，失败只能断连，交给客户端重试
+      #   defer 收尾：函数即将返回，错误已无法影响结果
+      #   内存缓冲：这些 Write 的实现恒返回 nil
+      #   终端输出：日志与 CLI 提示没有调用方可以接收错误
+      # 业务方法（store.Xxx / repo.Create / os.MkdirAll / json.Unmarshal …）
+      # 一律要求处理，不许进这张表。
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - (io.Writer).Write
+        - (io.WriteCloser).Close
+        - (io.ReadCloser).Close
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*encoding/json.Encoder).Encode
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.Rows).Close
+        # 单行查询的 Scan：ErrNoRows 由紧随其后的「没查到」分支处理，
+        # 逐处再判一次只会得到同样的结论。多行的 (*sql.Rows).Scan 不在此列，
+        # 类型不匹配会静默读出脏数据，必须检查。
+        - (*database/sql.Row).Scan
+        # 渲染/编码到响应流：与 w.Write 同类，失败时连接已经脏了
+        - (*html/template.Template).ExecuteTemplate
+        - (*text/template.Template).ExecuteTemplate
+        - image/png.Encode
+        - io.WriteString
+        - (*bytes.Buffer).Write
+        - (*bytes.Buffer).WriteRune
+        - (*bytes.Buffer).WriteString
+        - (*strings.Builder).Write
+        - (*strings.Builder).WriteString
+        - (*strings.Builder).WriteRune
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Print
+        - fmt.Printf
+        - fmt.Println
+    govet:
+      # inline 报的是「这次调用可以被编译器内联」——那是优化提示，不是缺陷，
+      # 按它改代码反而会把表达式拆得更难读。
+      disable:
+        - inline
+    misspell:
+      # eles / Eles 是 elevation（海拔）在 GPX 处理里的既有缩写，同时是数据库列名，
+      # 改不了也不该改。misspell 会把它当成 eels（鳗鱼）的拼写错误。
+      ignore-rules:
+        - eles
+        - Eles
     staticcheck:
       checks:
         # all 里包含 SA（缺陷）、S（简化）、ST（命名风格）、QF（快速修复建议）。

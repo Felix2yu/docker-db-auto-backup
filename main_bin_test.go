@@ -159,7 +159,7 @@ func TestSelectContainersIncludesAndExcludes(t *testing.T) {
 	}
 
 	cfg = &config{includeContainers: []string{"pg", "redis"}}
-	got, excluded = selectContainers(cfg, containers)
+	got, _ = selectContainers(cfg, containers)
 	if len(got) != 2 || got[0].Names[0] != "/pg" {
 		t.Errorf("白名单应按序保留, got %v", got)
 	}
