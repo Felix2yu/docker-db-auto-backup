@@ -1,1 +1,17 @@
-./.gitignore
+# 镜像只装配 bin/db-auto-backup，构建上下文越小越好。
+#
+# 这个文件曾经是指向 .gitignore 的符号链接，两者内容完全同步 —— 但它们的语义相反：
+#   .gitignore 要排除 bin/（构建产物不入库）
+#   .dockerignore 绝不能排除 bin/（那是 Dockerfile 的 COPY 源）
+# 加了 bin/ 规则后镜像构建直接报 `failed to calculate checksum of ref ...:
+# "/bin/db-auto-backup": not found`。已改为独立文件，不再共用内容。
+.git
+.github
+docs
+backups
+data
+*.md
+LICENSE
+coverage.out
+.gitignore
+.dockerignore

@@ -314,3 +314,7 @@ E2E 测试需要通过 Docker 运行（会启动 postgres / mariadb / mysql / re
 ```bash
 ./scripts/test.sh
 ```
+
+## 许可证
+
+本项目以 [BSD 3-Clause](LICENSE) 发布，© 2021 Jake Howard。
