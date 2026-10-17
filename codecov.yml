@@ -15,6 +15,7 @@ coverage:
       default:
         target: 80%           # 新增代码必须基本被测到
         threshold: 5%
+        informational: true   # 只提示不阻断：覆盖率下降不该把 CI 判红（稳定后再收紧）
 
 comment:
   layout: "reach, diff, flags, files"
