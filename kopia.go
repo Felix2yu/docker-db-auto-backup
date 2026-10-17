@@ -154,7 +154,10 @@ func (k *kopiaClient) maybeMaintenance(ctx context.Context, backupDir string) er
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err == nil {
-		os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+		// 维护标记只是「上次维护时间」的记录，写不进去不该让整个维护失败
+		if err := os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644); err != nil {
+			logInfo("写入维护标记失败: %v", err)
+		}
 	}
 	return nil
 }

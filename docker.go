@@ -25,7 +25,8 @@ type dockerClient struct {
 }
 
 func newDockerClient(ctx context.Context) (*dockerClient, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	// API 版本协商自 moby/client v0.6 起默认开启，无需再传 WithAPIVersionNegotiation
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, err
 	}

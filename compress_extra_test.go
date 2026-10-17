@@ -13,7 +13,9 @@ func TestNewDecompressReader(t *testing.T) {
 	// gzip
 	var gz bytes.Buffer
 	gw := gzip.NewWriter(&gz)
-	gw.Write([]byte("hello gzip"))
+	if _, err := gw.Write([]byte("hello gzip")); err != nil {
+		t.Fatalf("写入 gzip 数据: %v", err)
+	}
 	gw.Close()
 	r, err := newDecompressReader(&gz, "gzip")
 	if err != nil {
@@ -28,7 +30,9 @@ func TestNewDecompressReader(t *testing.T) {
 	// xz
 	var xb bytes.Buffer
 	xw, _ := xz.NewWriter(&xb)
-	xw.Write([]byte("hello xz"))
+	if _, err := xw.Write([]byte("hello xz")); err != nil {
+		t.Fatalf("写入 xz 数据: %v", err)
+	}
 	xw.Close()
 	r2, err := newDecompressReader(&xb, "xz")
 	if err != nil {
@@ -43,7 +47,9 @@ func TestNewDecompressReader(t *testing.T) {
 	// bz2
 	var bb bytes.Buffer
 	bw, _ := bzip2.NewWriter(&bb, nil)
-	bw.Write([]byte("hello bz2"))
+	if _, err := bw.Write([]byte("hello bz2")); err != nil {
+		t.Fatalf("写入 bz2 数据: %v", err)
+	}
 	bw.Close()
 	r3, err := newDecompressReader(&bb, "bz2")
 	if err != nil {

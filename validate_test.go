@@ -130,7 +130,9 @@ func TestValidateBackupFileGzip(t *testing.T) {
 
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(content))
+	if _, err := zw.Write([]byte(content)); err != nil {
+		t.Fatalf("写入 gzip 数据: %v", err)
+	}
 	zw.Close()
 
 	trunc := buf.Bytes()[:buf.Len()-4]

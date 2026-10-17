@@ -7,8 +7,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/robfig/cron/v3"
 	_ "time/tzdata"
+
+	"github.com/robfig/cron/v3"
 )
 
 func main() {
