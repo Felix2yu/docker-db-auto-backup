@@ -166,3 +166,11 @@ coverage.out
 .continue/
 .windsurf/
 .aider*
+
+# ---- 系统垃圾文件（macOS / Windows 都会生成）----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 构建产物
+/bin/
