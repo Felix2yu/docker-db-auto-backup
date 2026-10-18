@@ -15,6 +15,14 @@ import (
 func main() {
 	cfg := loadConfig()
 	initLogger(cfg)
+
+	// 压缩算法写错会让每一个容器的备份都失败，却在日志里表现得像备份本身出了问题，
+	// 因此启动时直接拒绝（Kopia 启用时压缩被强制为 plain，不会误伤）。
+	if algo := cfg.effectiveCompression(); !isValidCompression(algo) {
+		logError("不支持的压缩方式，请检查 COMPRESSION", "value", algo, "可选", "gzip / lzma / xz / bz2 / plain")
+		os.Exit(1)
+	}
+
 	initMetrics()
 	startMetricsServer(cfg.metricsAddr)
 
