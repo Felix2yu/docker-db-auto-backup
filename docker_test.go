@@ -133,7 +133,7 @@ func TestStartExec(t *testing.T) {
 	fake := newFakeAPIClient()
 	fake.execHandler = dumpHandler
 	dc := newFakeDockerClient(fake)
-	id, attach, err := dc.startExec(context.Background(), "c1", []string{"pg_dumpall"}, nil)
+	id, attach, err := dc.startExec(context.Background(), "c1", []string{"pg_dumpall"}, nil, "")
 	if err != nil {
 		t.Fatalf("startExec: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestStartExecCloses(t *testing.T) {
 	fake := newFakeAPIClient()
 	fake.execHandler = dumpHandler
 	dc := newFakeDockerClient(fake)
-	id, attach, err := dc.startExec(context.Background(), "c1", []string{"pg_dumpall"}, nil)
+	id, attach, err := dc.startExec(context.Background(), "c1", []string{"pg_dumpall"}, nil, "")
 	if err != nil {
 		t.Fatalf("startExec: %v", err)
 	}
