@@ -138,13 +138,19 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 | liuxia / yuexi | db | 无库外状态 | 是 |
 | qiansi | db，zip 可选 | uploads 仅在 zip 形态下覆盖 | 是（db 与 zip 两态） |
 | mujian | db，zip 可选 | uploads 仅在 zip 形态下覆盖 | 是（db 与 zip 两态） |
+| diarum | db，zip 可选 | `storage/` 媒体 + `vectors/` 向量索引 | 是（db 与 zip 两态） |
+| huozhi | db，zip 可选 | `uploads/` 账单图片；驱动切 Postgres 时拒绝导出 | 是（db 与 zip 两态） |
+| bili-history | **zip 为唯一形态** | 六个库打进一个包；库外图片/下载目录不进包 | 是（含漏设 `EXT=zip` 的反面用例） |
 
-> **命令写法的统一**：liuxia / yuexi / mujian 原先把二进制装在 `/app`（不在 PATH 上），
-> 导出命令必须写绝对路径，与其余五个不一致。基镜契约本来就是
-> `COPY bin/app /usr/local/bin/app` + `CMD ["app", ...]`，三者已改回契约形态，
+> **命令写法的统一**：liuxia / yuexi / mujian / diarum / huozhi / bili-history 原先把二进制装在
+> `/app`（不在 PATH 上），导出命令必须写绝对路径，与其余应用不一致。基镜契约本来就是
+> `COPY bin/app /usr/local/bin/app` + `CMD ["app", ...]`，六者已改回契约形态，
 > 于是全族命令同为 `<bin> backup`。副作用是镜像名推导从此对每个应用都成立——
 > 实测一个只打 `backup.provider=sqlite` 标签、不设任何 `BACKUP_SQLITE_*` 的
 > liuxia 容器可正常识别并备份成功。
+>
+> 唯一例外是 huozhi：它的二进制名是 `huozhi-server`，与镜像名 `huozhi` 不同，镜像名推导
+> 必然猜错，所以它的 `BACKUP_SQLITE_CMD` 必须显式声明，不能当成可省略的冗余配置。
 >
 > mujian 的镜像改动需要真实 cgo 二进制才能验证（webp/avif 无法 `CGO_ENABLED=0`
 > 交叉编译）：用 `golang:1.27-bookworm` 容器挂宿主 module cache 离线编译出
@@ -184,7 +190,10 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 9. 恢复演练：sqlite 容器跳过，`LOG_LEVEL=debug` 下可见「恢复演练暂不支持该类型，已跳过 provider=sqlite」（info 级不可见）；
 10. 多应用同轮：feixi / chaxin / guanfu / liuxia / yuexi / qiansi / qiansi（zip 态）/ shenshi 八个容器在同一轮里 `database=8 skipped=0`，`COMPRESSION=gzip` 下 8/8 成功；`.db` 逐个解开后魔数、`integrity_check`、schema 齐全，`.zip` 解开后确认包内快照与 `uploads/` 文件字节一致，扩展名按各容器声明分别落盘；
 11. 压缩叠加第二种算法：`COMPRESSION=xz` 下同样 5/5 通过；
-12. 还原确认：把五个应用备份出的 `.db` 分别放进全新数据卷、属主交给 1000、删掉旁文件后启动应用，五个都正常起来并读到自己的数据（sqlite 不参与恢复演练，这一步是手工补的）。
+12. 还原确认：把五个应用备份出的 `.db` 分别放进全新数据卷、属主交给 1000、删掉旁文件后启动应用，五个都正常起来并读到自己的数据（sqlite 不参与恢复演练，这一步是手工补的）；
+13. 第二批接入合测：bili-history / diarum / huozhi 三个容器同轮 3/3 成功，`.db` 与 `.zip` 各自按声明落盘；zip 形态把库外文件也带上并回读字节一致（diarum 的 `storage/**/pic.png`、huozhi 的 `uploads/1/invoice.png`），包内的 SQLite 条目单独解开仍 `integrity_check` 通过；
+14. 多库容器：一个只建出 2 个库的 bili-history 容器，其余 4 个可选库缺席时告警跳过、产物依然是有效的两条目 zip；反过来，同一容器不声明 `BACKUP_SQLITE_EXT=zip` 时校验失败、产物丢弃、本轮标记 failed——证明「一个容器一个文件」这条边界靠扩展名声明而不是靠猜；
+15. 驱动分支：huozhi 容器在 `HZ_DB_DRIVER=postgres` 下 `backup` 以 exit 1、stdout 0 字节拒绝，避免对着 Postgres 部署产出一份「看起来合法」的 SQLite 快照。
 
 > 修正一条早期记录：原写「`kill -9` 后删除 `-shm`，工具重建的 `-shm` 属主正确」。实测复现不出该场景——导出进程干净退出时会把 `-wal` checkpoint 回主库并删除 `-wal`/`-shm`，因此不会留下任何属主错误的旁文件。身份派生本身仍然有效（见第 3 条），这也是它存在的理由：若导出进程中途被杀，root 身份建的 `-shm` 会挡住降权运行的应用。
 
@@ -194,7 +203,7 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 
 | 项 | 说明 |
 |----|------|
-| 一个容器一个文件 | full 模式语义；多库容器建议应用把多库打包（zip/tar）后输出 |
+| 一个容器一个文件 | full 模式语义；多库容器由应用把多库打包后输出——bili-history 即此形态（六个库 → 一个 zip，`BACKUP_SQLITE_EXT=zip`），每库各自事务一致，跨库没有同一时间点 |
 | 应用必须供命令 | 镜像不提供 `backup` 子命令、也无 `sqlite3` CLI 时无法备份，只能等应用侧支持 |
 | `-shm` 属主 | 由 `BACKUP_SQLITE_USER`/`PUID` 保障；两者都缺失时沿用容器默认用户（与既有 provider 一致） |
 | 源库只读检查点 | 导出连接可能把 `-wal` 合并回主库（SQLite 正常行为），与属主同身份时无副作用 |
