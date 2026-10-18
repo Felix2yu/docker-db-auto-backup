@@ -65,7 +65,7 @@ buildPlans → provider.prepare / provider.backupMethod
 | 容器标签 | `backup.provider=sqlite`（既有机制，注册 provider 后自动生效） |
 | 环境变量 | 容器设置 `BACKUP_SQLITE_CMD`（如 `shenshi backup`）即视为声明，`probeSQLiteContainer` 在计划阶段探测 |
 
-命令解析优先级：`BACKUP_SQLITE_CMD` > 镜像名同名二进制 + `backup`（`ghcr.io/owner/app:tag` → `app backup`，取 basename 并用 `sqliteBinaryNamePattern` 约束字符集，防 shell 注入）。命令统一经容器内 `sh -c` 执行——`docker exec` 的任务命令不保证做 PATH 查找，因此镜像名推导要求该名字在容器 `PATH` 上；二进制装在 `/app` 等非标准目录的应用（实测：liuxia、yuexi）只能显式写绝对路径。
+命令解析优先级：`BACKUP_SQLITE_CMD` > 镜像名同名二进制 + `backup`（`ghcr.io/owner/app:tag` → `app backup`，取 basename 并用 `sqliteBinaryNamePattern` 约束字符集，防 shell 注入）。命令统一经容器内 `sh -c` 执行——`docker exec` 的任务命令不保证做 PATH 查找，因此推导出的名字必须在容器 `PATH` 上；基镜契约本就要求 `COPY bin/app /usr/local/bin/app`，守约的镜像无需任何额外配置。
 
 **两条识别路径能力不对称**（实测，非设计意图）：镜像名推导只在打了 `backup.provider=sqlite` 标签时可达。不打标签时，识别完全依赖 `BACKUP_SQLITE_CMD`——没设它的容器会先被 `probeSQLiteContainer` 判为"疑似"并 `continue`，永远走不到推导分支（`buildPlans`）。这是有意的保守取舍：不对陌生镜像执行猜出来的命令，代价是应用实现了 `backup` 子命令却漏配变量时只会告警、不会备份。
 
@@ -129,22 +129,27 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 
 各应用可在此基础上扩展：shenshi 的 `shenshi backup` 默认输出「JSON + 附件」的 zip（可经界面导入还原），`--format db` 输出 SQLite 快照；导出打开方式为 `store.OpenForExport`（跳过迁移与种子写入）。
 
-已接入的应用（验证口径见下）：
+已接入的应用（验证口径见下）。导出命令一律是 `<二进制名> backup`：
 
-| 应用 | 导出命令 | 产物 | 库外文件 | 容器级实测 |
-|------|----------|------|----------|------------|
-| shenshi | `shenshi backup` | zip（`BACKUP_SQLITE_EXT=zip`） | 附件已含 | 是 |
-| feixi / chaxin / guanfu | `<bin> backup` | db | 无库外状态 | 是 |
-| liuxia | `/app/liuxia backup` | db | 无库外状态（二进制不在 PATH） | 是 |
-| yuexi | `/app/yuexi backup` | db | 无库外状态（二进制不在 PATH） | 是 |
-| qiansi | `qiansi backup [--format zip]` | db，zip 可选 | uploads 仅在 zip 形态下覆盖 | 是（db 与 zip 两态） |
-| mujian | `/app/mujian backup [--format zip]` | db，zip 可选 | uploads 仅在 zip 形态下覆盖 | **否**，见下 |
+| 应用 | 产物 | 库外文件 | 容器级实测 |
+|------|------|----------|------------|
+| shenshi | zip（`BACKUP_SQLITE_EXT=zip`） | 附件已含 | 是 |
+| feixi / chaxin / guanfu | db | 无库外状态 | 是 |
+| liuxia / yuexi | db | 无库外状态 | 是 |
+| qiansi | db，zip 可选 | uploads 仅在 zip 形态下覆盖 | 是（db 与 zip 两态） |
+| mujian | db，zip 可选 | uploads 仅在 zip 形态下覆盖 | 是（db 与 zip 两态） |
 
-> mujian 没有做容器级实测：它的封面转码依赖 cgo（webp / avif），只能走 glibc 基镜
-> （`base:debian-13`），本机 `CGO_ENABLED=0 GOOS=linux` 直接编译不过，交叉编译又缺
-> linux 工具链。它的验证停留在宿主进程 + 真实运行实例（快照 `integrity_check` 通过、
-> zip 内封面字节一致），容器侧依赖的是与 liuxia / yuexi 完全相同的形态（`/app` 下
-> 绝对路径调用），那两者已实测通过。CI 出镜像后应补一次容器级确认。
+> **命令写法的统一**：liuxia / yuexi / mujian 原先把二进制装在 `/app`（不在 PATH 上），
+> 导出命令必须写绝对路径，与其余五个不一致。基镜契约本来就是
+> `COPY bin/app /usr/local/bin/app` + `CMD ["app", ...]`，三者已改回契约形态，
+> 于是全族命令同为 `<bin> backup`。副作用是镜像名推导从此对每个应用都成立——
+> 实测一个只打 `backup.provider=sqlite` 标签、不设任何 `BACKUP_SQLITE_*` 的
+> liuxia 容器可正常识别并备份成功。
+>
+> mujian 的镜像改动需要真实 cgo 二进制才能验证（webp/avif 无法 `CGO_ENABLED=0`
+> 交叉编译）：用 `golang:1.27-bookworm` 容器挂宿主 module cache 离线编译出
+> linux/arm64 二进制后起容器实测，`/healthz` 正常，`db` 与 `zip` 两态产物均通过
+> （zip 内含 `data.json`、`mujian.db` 与 `covers/` 封面文件，字节一致）。
 
 ---
 

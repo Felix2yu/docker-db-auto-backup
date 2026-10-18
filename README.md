@@ -250,7 +250,7 @@ SQLite 是应用内嵌的文件型数据库，没有服务进程可连、容器�
 | 容器标签 | `backup.provider: sqlite` |
 | 环境变量 | 在应用容器内设置 `BACKUP_SQLITE_CMD`（如 `shenshi backup`），无需标签 |
 
-导出命令：`BACKUP_SQLITE_CMD` 原样生效；未设置时按镜像名推导同名二进制 + `backup`（约定：`ghcr.io/felix2yu/shenshi` → `shenshi backup`）。命令统一经容器内 `sh -c` 执行，因此**推导出的名字必须能被容器内 shell 解析**——二进制装在 `/app` 这类不在 `PATH` 里的目录时，镜像名推导无法工作，只能用绝对路径显式声明 `BACKUP_SQLITE_CMD=/app/myapp backup`。
+导出命令：`BACKUP_SQLITE_CMD` 原样生效；未设置时按镜像名推导同名二进制 + `backup`（约定：`ghcr.io/felix2yu/shenshi` → `shenshi backup`）。命令统一经容器内 `sh -c` 执行，因此**推导出的名字必须能被容器内 shell 解析**——基镜契约本就要求二进制装在 `/usr/local/bin`（`COPY bin/app /usr/local/bin/app`），守约的镜像无需任何额外配置。
 
 两条识别路径能做到的事不同，据实测：
 
