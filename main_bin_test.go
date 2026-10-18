@@ -176,3 +176,17 @@ func TestSelectContainersIncludesAndExcludes(t *testing.T) {
 		t.Errorf("标签过滤不对, got %v/%d", got, excluded)
 	}
 }
+
+// TestMainBinaryRejectsUnknownCompression 覆盖启动校验：COMPRESSION 拼错时不该带着
+// 坏配置去跑完整轮（每个容器都会在落盘时报「未知的压缩方式」，看起来像备份本身坏了），
+// 而应一开始就退出并说明原因。
+func TestMainBinaryRejectsUnknownCompression(t *testing.T) {
+	bin := buildBinary(t)
+	out, code := runBinary(t, bin, nil, map[string]string{"COMPRESSION": "zstd"})
+	if code == 0 {
+		t.Fatalf("COMPRESSION=zstd 应在启动时被拒绝，实际正常退出\n%s", out)
+	}
+	if !strings.Contains(out, "不支持的压缩方式") {
+		t.Errorf("输出应给出可读的拒绝原因，实际：%s", out)
+	}
+}
