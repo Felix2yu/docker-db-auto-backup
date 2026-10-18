@@ -129,15 +129,22 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 
 各应用可在此基础上扩展：shenshi 的 `shenshi backup` 默认输出「JSON + 附件」的 zip（可经界面导入还原），`--format db` 输出 SQLite 快照；导出打开方式为 `store.OpenForExport`（跳过迁移与种子写入）。
 
-已接入的应用（均按 §8 的方式做过容器级实测）：
+已接入的应用（验证口径见下）：
 
-| 应用 | 导出命令 | 产物 | 库外文件 |
-|------|----------|------|----------|
-| shenshi | `shenshi backup` | zip（`BACKUP_SQLITE_EXT=zip`） | 附件已含 |
-| feixi / chaxin / guanfu | `<bin> backup` | db | 无库外状态 |
-| liuxia | `/app/liuxia backup` | db | 无库外状态（二进制不在 PATH） |
-| yuexi | `/app/yuexi backup` | db | 无库外状态（二进制不在 PATH） |
-| qiansi / mujian | `<bin> backup [--format zip]` | db，zip 为可选 | uploads 仅在 zip 形态下覆盖 |
+| 应用 | 导出命令 | 产物 | 库外文件 | 容器级实测 |
+|------|----------|------|----------|------------|
+| shenshi | `shenshi backup` | zip（`BACKUP_SQLITE_EXT=zip`） | 附件已含 | 是 |
+| feixi / chaxin / guanfu | `<bin> backup` | db | 无库外状态 | 是 |
+| liuxia | `/app/liuxia backup` | db | 无库外状态（二进制不在 PATH） | 是 |
+| yuexi | `/app/yuexi backup` | db | 无库外状态（二进制不在 PATH） | 是 |
+| qiansi | `qiansi backup [--format zip]` | db，zip 可选 | uploads 仅在 zip 形态下覆盖 | 是（db 与 zip 两态） |
+| mujian | `/app/mujian backup [--format zip]` | db，zip 可选 | uploads 仅在 zip 形态下覆盖 | **否**，见下 |
+
+> mujian 没有做容器级实测：它的封面转码依赖 cgo（webp / avif），只能走 glibc 基镜
+> （`base:debian-13`），本机 `CGO_ENABLED=0 GOOS=linux` 直接编译不过，交叉编译又缺
+> linux 工具链。它的验证停留在宿主进程 + 真实运行实例（快照 `integrity_check` 通过、
+> zip 内封面字节一致），容器侧依赖的是与 liuxia / yuexi 完全相同的形态（`/app` 下
+> 绝对路径调用），那两者已实测通过。CI 出镜像后应补一次容器级确认。
 
 ---
 
@@ -170,7 +177,9 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 7. 压缩叠加：`COMPRESSION=gzip` 下 zip / db 产物均通过——校验先解压再查内层魔数（`validateBackupFile`）；
 8. 标签路径：只打 `backup.provider=sqlite`、不给任何 `BACKUP_SQLITE_*` 变量，工具按镜像名推出 `shenshi backup` 并真实执行（产物是 zip，被默认 `.db` 校验拒绝，恰好反证命令确实跑了；补 `BACKUP_SQLITE_EXT=zip` 后成功落盘）；
 9. 恢复演练：sqlite 容器跳过，`LOG_LEVEL=debug` 下可见「恢复演练暂不支持该类型，已跳过 provider=sqlite」（info 级不可见）；
-10. 多应用同轮：feixi / chaxin / guanfu / liuxia / yuexi 五个容器在同一轮里 `database=5 skipped=0`，`COMPRESSION=gzip` 下 5/5 成功，逐个解开后魔数、`integrity_check` 与 schema 齐全。
+10. 多应用同轮：feixi / chaxin / guanfu / liuxia / yuexi / qiansi / qiansi（zip 态）/ shenshi 八个容器在同一轮里 `database=8 skipped=0`，`COMPRESSION=gzip` 下 8/8 成功；`.db` 逐个解开后魔数、`integrity_check`、schema 齐全，`.zip` 解开后确认包内快照与 `uploads/` 文件字节一致，扩展名按各容器声明分别落盘；
+11. 压缩叠加第二种算法：`COMPRESSION=xz` 下同样 5/5 通过；
+12. 还原确认：把五个应用备份出的 `.db` 分别放进全新数据卷、属主交给 1000、删掉旁文件后启动应用，五个都正常起来并读到自己的数据（sqlite 不参与恢复演练，这一步是手工补的）。
 
 > 修正一条早期记录：原写「`kill -9` 后删除 `-shm`，工具重建的 `-shm` 属主正确」。实测复现不出该场景——导出进程干净退出时会把 `-wal` checkpoint 回主库并删除 `-wal`/`-shm`，因此不会留下任何属主错误的旁文件。身份派生本身仍然有效（见第 3 条），这也是它存在的理由：若导出进程中途被杀，root 身份建的 `-shm` 会挡住降权运行的应用。
 
