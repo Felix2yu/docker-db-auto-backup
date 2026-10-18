@@ -2,279 +2,165 @@
 
 ## 1. 目标与范围
 
-为 `docker-db-auto-backup` 增加 SQLite 备份能力，覆盖 Home Assistant、Vaultwarden、navidrome、FreshRSS、PhotoPrism 这类「应用容器内嵌 SQLite 文件」的场景。
+为 `docker-db-auto-backup` 增加 SQLite 备份能力，覆盖「应用容器内嵌 SQLite 文件」的场景（自建服务、Vaultwarden、Home Assistant 这类应用）。
 
-**默认导出格式**：SQL 文本（`.dump`），即 `fileExt = "sql"`，与现有 postgres / mysql 行为对齐。
-
-**非目标**：
-
-- 不做宿主机上的 SQLite 备份（本项目只处理容器）。
-- 不引入 Go 的 SQLite 驱动。`mattn/go-sqlite3` 需要 cgo，会破坏当前静态编译与镜像体积，且容器内已有官方 CLI 可用。
-- 不接入恢复演练（理由见 §6）。
-
----
-
-## 2. 现状：可复用的管道
-
-`backupProvider` 只需提供一条容器内命令，其余全部由既有代码承担：
+**导出方式：应用自导出。** 应用提供 `backup` 子命令，在进程内用 SQLite 自己的快照能力（`VACUUM INTO` / backup API）生成一致副本并写到 stdout，工具侧完全复用既有管道：
 
 ```
-buildPlans → provider.singleDB / provider.backupMethod
+buildPlans → provider.prepare / provider.backupMethod
   → collectTasks（展开为最小调度单元）
   → runTaskWithRetry（并发 + 超时 + 重试）
   → writeBackup（stdout 流式 → 临时文件 → 压缩 → 校验 → 原子 rename）
   → manifest / 异常检测 / Kopia / 恢复演练 / 保留清理 / 通知 / 心跳
 ```
 
-`redisBackupCommand` 已经是 `sh -c "... cat dump.rdb"` 的先例，证明**二进制流**走这条管道同样可行。因此本次改动**不触碰 `backup.go` 的落盘逻辑**，只做增量扩展。
+**非目标**：
 
-`backupProvider` 现结构（`provider.go:18`）：
-
-```go
-type backupProvider struct {
-	name         string
-	patterns     []string
-	fileExt      string
-	backupMethod func(ctx, cfg, dc, containerID) ([]string, []string, error)
-	singleDB     func(ctx, cfg, dc, containerID) ([]database, error)
-}
-```
+- 不做宿主机上的 SQLite 备份（本项目只处理容器）。
+- 不引入 Go 的 SQLite 驱动（不校验库内容、不做恢复演练，理由见 §6）。
+- 不强求容器内有 `sqlite3` CLI（绝大多数应用镜像没有）。
 
 ---
 
-## 3. 三个必须正视的差异
+## 2. 为什么是「应用自导出」
 
-### 3.1 无法靠镜像名识别
+### 2.1 排除：容器内 CLI（`sqlite3 .backup` / `.dump`）
 
-SQLite 不是服务型数据库，不存在 `sqlite:latest` 这类官方镜像；使用者是各类应用容器。`patterns` 匹配在此无意义，必须依赖已有的标签机制。
+- 应用镜像普遍不带 `sqlite3`；注入静态二进制需要 `CopyToContainer`，并在目标容器无 `/tmp`、根文件系统只读时失败——依赖链最长、失败面最大。
+- `.backup /dev/stdout` 实测不可用（`Error: cannot open`），必须先在容器内落临时文件再 `cat`，多一份容器内空间占用与清理责任。
+- `.dump` 是逐表顺序读取，autocommit 下没有单一快照，跨表可能自相矛盾。
 
-`getBackupProviderByLabel` 优先级高于镜像名匹配，且直接查 `providers` 数组，因此新增名为 `sqlite` 的 provider 后，`backup.provider=sqlite` 即自动生效，**无需改动识别逻辑**。
+### 2.2 排除：从容器外热拷贝 `db`/`-wal`/`-shm`
 
-### 3.2 容器内通常没有 sqlite3 CLI
+实测（20ms 写一次、压测 `integrity_check`）：
 
-上述应用镜像基本不自带 `sqlite3` 二进制。可用现有的 `dc.hasBinary`（带 per-container 缓存）探测，据此选择策略。
+| 拷贝内容 | 通过率 |
+|----------|--------|
+| db + wal + shm | 14/15 |
+| db + wal | 12/15 |
+| 仅 db | 11/15 |
 
-### 3.3 一致性是真正的风险
+低频写入（200ms 一次）30/30 通过——说明它在「安静」时好用，在活跃写入时**周期性产出损坏副本**。作为统一备份体系的基础不能接受，也不值得用「校验 + 重试 + 失败报错」把它兜成可用。
 
-直接拷贝一个正在被写入的 `.db` 文件，在 WAL 模式下会遗漏尚未 checkpoint 的 `-wal` 内容，恢复后极可能得到损坏或过期数据。
+### 2.3 采用：应用自导出
 
-更进一步：`.dump` 是**逐表顺序读取**的。在 autocommit 模式下，跨表之间没有单一快照保证——表 A 在 T1 读取、表 B 在 T2 读取，若中间发生写入，得到的 dump 内部自相矛盾（外键、触发器、跨表业务逻辑都可能失效）。
+| 维度 | 应用自导出 |
+|------|------------|
+| 一致性 | SQLite 自身的事务级快照，WAL 模式下也不阻塞写入 |
+| 依赖 | 无：镜像里没有任何额外二进制，也不需要容器内临时空间（应用侧自管） |
+| 路径解析 | 应用最清楚自己的库在哪（`DB_PATH`/`DATA_DIR` 等），不靠 glob 启发 |
+| 产物语义 | 应用可自行决定「带附件的完整备份」（如 shenshi 的 zip）还是裸库快照 |
+| 契约 | 显式、可单测、失败模式最少 |
 
-**这是本设计的核心结论：不能直接用 `.dump` 打源库。**
+代价是每个应用要加约 30 行代码（见 §7.2），换来的是把一致性责任交给唯一有资格承担的一方。
 
 ---
 
-## 4. 设计决策
+## 3. 识别方式
 
-### 决策 1：先 `.backup` 到容器内临时文件，再 `.dump` 该快照
+`sqlite` provider 的 `patterns` 为空：SQLite 没有官方镜像，镜像名匹配没有可靠依据。识别只有两条路：
 
-组合使用两条命令，同时拿到「原子一致性」与「SQL 文本输出」：
-
-```sh
-set -e
-t=/tmp/auto-backup-sqlite-<slug>.db
-rm -f "$t"
-if sqlite3 '<src>' ".backup '$t'" 2>/dev/null; then
-  sqlite3 "$t" .dump || { rm -f "$t"; exit 1; }
-else
-  sqlite3 '<src>' .dump || exit 1
-fi
-printf '%s\n' '-- SQLite dump complete'
-rm -f "$t"
-```
-
-要点：
-
-- `.backup` 走 SQLite 官方 backup API，是**真正的原子快照**，且天然包含 WAL 中已提交的内容。对它执行 `.dump`，源库的并发写入再无影响。
-- `if` 分支做**能力回退**：`.backup` 需要 SQLite ≥ 3.27（2019-02）。老版本 CLI 会失败，此时退回直接 `.dump` 源库并接受一致性降级（需在日志中明确记录）。
-- 用 `sh -c` 而非 `bash -c`：alpine/busybox 环境没有 bash。
-- `set -e` 保证任一环节失败即非 0 退出；`if` 条件内的失败不触发 `set -e`，正是回退逻辑需要的语义。
-- 结尾的 `printf` 输出 `-- SQLite dump complete`：
-  - `--` 是标准 SQL 注释，导入时无副作用；
-  - `validate.go` 的 `sql` 分支要求尾部包含 `dump complete`（那是 `pg_dumpall` 的产物），追加这一行即可复用现有校验，**无需修改 `validate.go`**。
-- 临时文件路径用 `<slug>`（库名派生）而非 `$$`，保证同一容器内多库不互相覆盖；`rm -f` 前置以满足 `.backup`「目标文件必须不存在」的约束。
-
-### 决策 2：始终按库拆分输出
-
-一个容器常有多个 `.db`。给 `backupProvider` 增加 `forceSingle bool`，`buildPlans` 的条件改为：
-
-```go
-if (cfg.singleDBMode || provider.forceSingle) && provider.singleDB != nil {
-```
-
-这样无论是否开启 `SINGLE_DB_MODE`，SQLite 都走 `singleDB` 路径，每个库一个文件，复用 `validateDBName`、并发池、重试与清单。
-
-`backupMethod` 仍须实现，用于「枚举失败 → `modeFullFallback`」的兜底：把所有路径 dump 进单一文件。
-
-### 决策 3：默认注入静态 sqlite3，仅注入不可行才失败
-
-「目标容器无 sqlite3」**不再是阻塞项**：备份镜像自带静态 `sqlite3`（§5.6），`sqliteEnsureCLI` 在每次备份前按需 `docker cp` 进目标容器并执行（§4.1）。因此：
-
-- 目标**有** sqlite3 → 直接复用，跳过注入；
-- 目标**无** sqlite3 → 注入备份镜像自带的静态二进制，照常产出完整 dump；
-- 注入**也失败**（目标无 `/tmp`、根文件系统只读、或 `CopyToContainer` 报错）→ 返回 `permanent` 错误并告警，进入下方显式兜底。
-
-理由：项目在多个环节已确立「宁可失败也不产出可疑备份」的原则（退出码非 0 判失败、0 字节丢弃、校验失败丢弃）。注入方案既满足该原则，又不必在「普遍无 sqlite3」的真实场景放弃备份。
-
-需要最后兜底的用户通过标签**显式开启原始拷贝**（`fallback=copy`）：
-
-```
-backup.sqlite.fallback=copy
-```
-
-开启后执行 `cat '<db>' '<db>-wal' '<db>-shm'` 合并流式输出（某文件不存在则跳过），同时：
-
-1. 日志 warn 明确提示「原始拷贝无法保证一致性，WAL 内容可能不完整」；
-2. `fileExt` 切换为 `db`，并在 `checkBackupStructure` 新增 SQLite 魔数校验。
-
-注意：原始拷贝仍尽量带上 `-wal`/`-shm`，是为了在 WAL 模式下尽可能多保留已提交内容；但它**不提供 `.backup` 的原子快照语义**，并发写入瞬间仍可能撕裂，故仅作显式兜底、默认关闭。
-
-### 决策 4：库路径由标签声明，支持多路径与 glob
-
-| 标签 | 说明 |
+| 方式 | 说明 |
 |------|------|
-| `backup.provider=sqlite` | 必需，声明 provider |
-| `backup.sqlite.path` | 必需，逗号分隔；每项可为精确路径或 glob |
-| `backup.sqlite.fallback=copy` | 可选，显式开启无 CLI 时的原始拷贝降级 |
+| 容器标签 | `backup.provider=sqlite`（既有机制，注册 provider 后自动生效） |
+| 环境变量 | 容器设置 `BACKUP_SQLITE_CMD`（如 `shenshi backup`）即视为声明，`probeSQLiteContainer` 在计划阶段探测 |
 
-展开 glob 在容器内进行：
+命令解析优先级：`BACKUP_SQLITE_CMD` > 镜像名同名二进制 + `backup`（`ghcr.io/owner/app:tag` → `app backup`，取 basename 并用 `sqliteBinaryNamePattern` 约束字符集，防 shell 注入）。命令统一经容器内 `sh -c` 执行——`docker exec` 的任务命令不保证做 PATH 查找。
 
-```sh
-for f in <pattern>; do [ -f "$f" ] && printf '%s\n' "$f"; done
-```
-
-未匹配时 glob 会退化为字面量，`[ -f ]` 可过滤掉，无需额外判空。
-
-库名取 `basename` 去掉最后一个扩展名（`home-assistant_v2.db` → `home-assistant_v2`），再经 `safeDBName` 校验；含空格等不安全字符的库会被跳过并告警。
+**防漏备份**：未声明导出命令、但环境变量值里出现 `.db`/`.sqlite`/`.sqlite3` 后缀或 `sqlite://` DSN 的容器，会被计入 `unmatched`，在日志与通知里提示「疑似 SQLite 但未能识别」，而不是静默跳过。探测走 `containerEnv`（带缓存、10s 超时、失败静默），不改变其它容器的行为。
 
 ---
 
-## 5. 改动清单
+## 4. 产物与校验
 
-### 5.1 `provider.go`
+- 默认产物 `{BACKUP_DIR}/{日期}/{容器名}.db`（full 模式，一个容器一个文件）。
+- `BACKUP_SQLITE_EXT` 覆盖扩展名：应用导出「数据 + 附件」的 zip 时设为 `zip`，工具按 `PK\x03\x04` 校验、按 `.zip` 命名。扩展名经 `sqliteFileExtPattern`（字母数字、≤16 位）约束。
+- `validate.go` 的 `checkBackupStructure` 增加两个分支：`db` 校验 `SQLite format 3\0` 魔数；`zip` 校验本地文件头魔数。
+- 扩展名与产物不一致时（如忘了 `BACKUP_SQLITE_EXT=zip`），校验失败、产物丢弃、备份标记失败——不允许把 zip 当 SQLite 存下来。
 
-新增：
+---
 
-```go
-const labelSQLitePath     = "backup.sqlite.path"
-const labelSQLiteFallback = "backup.sqlite.fallback"
+## 5. exec 身份
 
-// 追加到 backupProvider
-forceSingle bool
-```
+pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的导出进程会碰数据目录：**应用停止时一个 root 身份的连接会创建属主为 root 的 `-shm`/`-wal`，之后降权运行的应用反而打不开自己的库。**
 
-新增函数：
+因此新增 `sqliteExecUser`，按优先级决定 `ExecCreateOptions.User`：
 
-| 函数 | 职责 |
+1. `BACKUP_SQLITE_USER`（显式，形如 `1000:1000` 或用户名）
+2. `PUID`/`PGID`（同时存在且为纯数字时拼成 `uid:gid`）
+3. 留空：沿用容器默认用户（与其它 provider 一致）
+
+该逻辑仅挂在 sqlite provider 的 `prepare` 钩子上，不改动既有 provider 的执行行为。
+
+---
+
+## 6. 恢复与恢复演练
+
+- `db` 产物：放回数据目录、修属主、重启应用（`VACUUM INTO` 产物为 delete 日志模式，应用启动会按自身逻辑切回 WAL）。
+- `zip` 产物：用应用自己的导入功能恢复（如 shenshi 的上传导入）。
+- **不接入恢复演练**：演练容器使用源镜像，而源镜像没有 sqlite3 CLI；在备份容器内解析需要引入 SQLite 驱动。`runRestoreDrill` 会打印「恢复演练暂不支持该类型，已跳过」，行为正确。
+
+---
+
+## 7. 改动清单（已落地）
+
+### 7.1 工具侧
+
+| 文件 | 内容 |
 |------|------|
-| `sqliteSingleDB` | 读标签 → 展开路径 → 探测 CLI → 为每个库生成 `database` |
-| `sqliteBackupCommand` | full 模式回退：所有库 dump 到单一文件 |
-| `sqliteDumpScript(src, slug string) string` | 生成 §4.1 的 shell 脚本 |
-| `sqliteListScript(patterns []string) string` | 生成 glob 展开脚本 |
-| `sqliteDBName(path string) string` | basename 去扩展名 |
+| `provider.go` | sqlite provider 注册；`sqliteBackupCommand` / `sqliteBinaryName` / `probeSQLiteContainer` / `sqlitePathLikeValue` / `prepareSQLitePlan` / `sqliteFileExt` / `sqliteExecUser` |
+| `backup.go` | `containerPlan` 增加 `fileExt` / `execUser`；`buildPlans` 调用 `provider.prepare` 并接入 env 探测与疑似告警；`collectTasks` 改用计划级扩展名；`writeBackup` 透传 exec 用户 |
+| `docker.go` | `startExec` 支持 `User` |
+| `validate.go` | `db` / `zip` 魔数校验 |
+| `README.md` | 「SQLite 备份说明」章节（识别、可选变量、应用侧约定、限制） |
+| 测试 | `sqlite_test.go`：命令推导、env 覆盖、注入防御、探测、标签/ env 识别、疑似告警、db 与 zip 的端到端落盘、两种魔数校验 |
 
-注册 provider：
+### 7.2 应用侧约定
 
-```go
-{
-	name:         "sqlite",
-	patterns:     nil,          // 只能靠标签识别
-	fileExt:      "sql",
-	forceSingle:  true,
-	backupMethod: sqliteBackupCommand,
-	singleDB:     sqliteSingleDB,
-}
-```
+应用需实现 `backup` 子命令：
 
-### 5.2 `backupProvider` / `database` / `containerPlan` 的 fileExt 覆盖
+- 在 `main()` 最前面拦截，早于存储初始化/迁移（导出进程不该改 schema）；
+- 只读/不迁移地打开数据库；
+- `VACUUM INTO` 到临时目录，再把文件流式写到 stdout；
+- 日志走 stderr，stdout 只承载备份数据。
 
-`fileExt` 目前是 provider 级字段，而降级模式需要 per-database 切换为 `db`。最小侵入做法：
-
-- `database` 增加 `fileExt string`（空则用 provider 默认）
-- `containerPlan` 增加 `fileExt string`（full 模式回退用）
-- `collectTasks` 两处各加一行 `if x != "" { ext = x }`
-
-### 5.3 `docker.go`
-
-- 新增 `labelSQLitePath` / `labelSQLiteFallback` 常量
-- 新增 `containerLabels(ctx, containerID) map[string]string`，带 `labelCache`
-- 重构 `containerBackupProviderLabel` 复用该缓存（当前每次调用都触发一次 `ContainerInspect`，`buildPlans` 里每个容器会调用两次）
-
-### 5.4 `backup.go`
-
-`buildPlans` 条件改为支持 `forceSingle`（一行）。
-
-另需处理边界：`forceSingle` 下若所有库名均不合法，`dbs` 为空而 `mode == single`，该容器既不计成功也不计失败（静默无产出）。补充：枚举结果为空时记一条 warning 并计入 `unmatched`。
-
-### 5.5 `validate.go`
-
-`checkBackupStructure` 增加：
-
-```go
-case "db":
-    if !bytes.HasPrefix(head, []byte("SQLite format 3\x00")) {
-        return errors.New("SQLite 备份缺少文件头魔数")
-    }
-```
-
-仅降级模式会走到，属增量分支，不影响现有 `sql` / `rdb`。
-
-### 5.6 `README.md`
-
-- 「支持的数据库」新增 SQLite 条目
-- 新增「SQLite 备份说明」章节，与「Redis / Valkey 备份说明」并列，说明标签用法、一致性机制、无 CLI 时的行为
-- 环境变量表无需新增（全部走标签）
-
-### 5.8 `docker-compose.yml`
-
-可选：加一个基于 alpine 的 sqlite 示例服务用于本地验证。非必需。
+各应用可在此基础上扩展：shenshi 的 `shenshi backup` 默认输出「JSON + 附件」的 zip（可经界面导入还原），`--format db` 输出 SQLite 快照；导出打开方式为 `store.OpenForExport`（跳过迁移与种子写入）。
 
 ---
 
-## 6. 恢复演练：不接入
+## 8. 测试与验证
 
-`runRestoreDrill` 目前白名单为 postgres / mysql。SQLite 不接入，理由：
-
-1. 演练容器使用**源镜像**（注意：备份镜像本身现已自带静态 `sqlite3`，但演练故意用源镜像以贴近生产），而这些源镜像大多不含 `sqlite3` CLI，无法执行导入；
-2. 固定改用带 sqlite 的基础镜像则需要联网安装，且脱离了「用生产镜像验证」的意义；
-3. 在备份容器内做解析校验需引入 SQLite 驱动，触发 cgo（见 §1 非目标）。
-
-保持现状：`runRestoreDrill` 会打印「恢复演练暂不支持该类型，已跳过」，行为正确，无需改动。
-
----
-
-## 7. 测试方案
-
-复用 `docker_mock_test.go` 的 `fakeAPIClient`，通过 `fake.inspect[id].Container.Config.Labels` 注入标签，`fake.execHandler` 按命令内容返回模拟输出。
-
-需在 `dumpHandler` 中补充分支：`which sqlite3` 的成功/失败两态、`sqlite3 .backup`、`sqlite3 .dump`、glob 展开输出。
+**单元测试**（`go test ./...`，含新用例）：
 
 | 用例 | 断言 |
 |------|------|
-| `TestSqliteSingleDB` | 多路径展开正确；命令含 `.backup` 与 `.dump`；结尾带 dump complete 标记 |
-| `TestSqliteSingleDBNoCLI` | 无 CLI 且未开启 fallback → 返回错误 |
-| `TestSqliteSingleDBFallback` | 开启 fallback → 命令为 `cat`；`fileExt == "db"` |
-| `TestSqliteSingleDBGlob` | glob 展开脚本过滤掉未匹配的字面量 |
-| `TestSqliteSingleDBNoPath` | 缺 `backup.sqlite.path` → 返回错误 |
-| `TestSqliteDBName` | 去扩展名、含空格被 `validateDBName` 拒绝 |
-| `TestSqliteDumpScript` | 脚本含 `set -e`；`.backup` 失败时有 `.dump` 回退；退出码语义正确 |
-| `TestValidateSQLiteFile` | `db` 扩展的魔数校验通过/拒绝 |
-| `TestGetBackupProviderByLabelSQLite` | `backup.provider=sqlite` 命中 |
+| `TestSqliteBackupCommandFromImageName` | 镜像名约定 → `sh -c "app backup"` |
+| `TestSqliteBackupCommandEnvOverride` | `BACKUP_SQLITE_CMD` 原样生效 |
+| `TestSqliteBackupCommandEnvReadErrorFallsBack` | env 不可读时回退镜像名推导 |
+| `TestSqliteBackupCommandNoBinary` | 无法推导时报错并提示声明变量 |
+| `TestSqliteBinaryNameRejectsUnsafe` | shell 元字符被拒绝 |
+| `TestProbeSQLiteContainer` / `sqlitePathLikeValue` | 声明与疑似两态、DSN 与后缀识别 |
+| `TestBuildPlansSQLiteByLabel|ByEnv|LikelyUnmatched` | 标签、env 识别；疑似容器进告警清单 |
+| `TestSqliteFileExtOverride` | 扩展名覆写与非法值忽略 |
+| `TestSqliteExecUser` | 显式 > PUID/PGID > 默认 |
+| `TestBackupContainerSQLiteEndToEnd` / `...ZipEndToEnd` | 完整链路：识别 → exec → 校验 → 落盘 → 清单 |
+| `TestValidateBackupSQLiteMagic` / `...ZIP` | 魔数通过与拒绝 |
 
-**集成验证**（建议在实现阶段用真实 SQLite 做一次）：起一个临时容器写入数据，在并发写入过程中执行上述脚本，确认 dump 可完整导入且跨表一致——用于印证 §4.1 关于 `.dump` 快照隔离的论断。
+**真实容器端到端**（本机 Docker，验证记录）：
+
+1. shenshi 容器（用户 1000，WAL 模式）运行中经 `docker exec` 导出：`PRAGMA integrity_check` 通过，刚提交（尚在 `-wal` 中）的任务出现在快照里；
+2. 工具以 `BACKUP_SQLITE_CMD` 自动识别并完成备份：zip 与 db 两种产物均落盘、校验通过、清单记录 `provider: sqlite`；
+3. 崩溃恢复场景（`kill -9` 后删除 `-shm`）：工具以 `PUID:PUID` 身份执行，重建的 `-shm` 属主正确，应用可再次启动；
+4. 恢复演练：把备份的 `.db` 放回 `-v` 挂载的数据目录，应用正常启动并读到数据；
+5. 反例：应用输出 zip 而未声明 `BACKUP_SQLITE_EXT=zip` → 校验失败、产物丢弃、本轮标记 failed（不静默存坏备份）。
 
 ---
 
-## 8. 风险与未决项
+## 9. 已知边界
 
-| 项 | 说明 | 处置 |
-|----|------|------|
-| `.dump` 快照隔离 | §3.3 指出逐表读取可能不一致，故设计改为先 `.backup` 再 `.dump` | 实现阶段用真实 SQLite 集成验证 |
-| 容器内临时空间 | `.backup` 需在容器 `/tmp` 写入一份 db 大小的快照 | 备份前无法预知；失败会由退出码捕获。可考虑后续加磁盘预检 |
-| SQLite < 3.27 | `.backup` 不可用 | 自动回退直接 `.dump`，日志 warn |
-| 应用持有排他锁 | 极端情况下 `.backup` 可能超时 | 已有 `BACKUP_TIMEOUT_MINUTES` 与重试覆盖 |
-| 库名冲突 | 同一容器两个同名 basename（不同目录） | 文件名会冲突，需在后处理去重或加序号——**待定** |
-
-## 9. 工作量估计
-
-新增约 230 行实现（含 `sqliteEnsureCLI` / `copyFileToContainer`）+ 约 170 行测试 + Dockerfile 静态 sqlite3 构建阶段 + 文档，涉及 6 个源文件（`provider.go`、`docker.go`、`backup.go`、`validate.go`、`config.go`、`Dockerfile`），**不改动落盘主链路**（`backup.go` 的 `writeBackup`、压缩、校验、Kopia、通知全部复用）。
+| 项 | 说明 |
+|----|------|
+| 一个容器一个文件 | full 模式语义；多库容器建议应用把多库打包（zip/tar）后输出 |
+| 应用必须供命令 | 镜像不提供 `backup` 子命令、也无 `sqlite3` CLI 时无法备份，只能等应用侧支持 |
+| `-shm` 属主 | 由 `BACKUP_SQLITE_USER`/`PUID` 保障；两者都缺失时沿用容器默认用户（与既有 provider 一致） |
+| 源库只读检查点 | 导出连接可能把 `-wal` 合并回主库（SQLite 正常行为），与属主同身份时无副作用 |

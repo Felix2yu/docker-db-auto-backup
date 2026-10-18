@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -140,6 +141,19 @@ func checkBackupStructure(head, tail []byte, total int64, fileExt string) error 
 		// 两种布局都要接受，否则开启校验和的真实 Redis 会被误判为截断。
 		if !rdbHasEOFMarker(tail) {
 			return errors.New("RDB 备份缺少结束标记 0xFF，可能被截断")
+		}
+	case "db":
+		// SQLite 应用自导出的快照。文件头 16 字节以 "SQLite format 3\0" 开头，
+		// 尾部没有固定的结束标记（末页由校验和/完整性自证），因此只校验魔数。
+		if !bytes.HasPrefix(head, []byte("SQLite format 3\x00")) {
+			return errors.New("SQLite 备份缺少文件头魔数，可能不是有效快照")
+		}
+	case "zip":
+		// 应用自导出型容器也可能输出 zip（如数据 + 附件一起打包）。
+		// 本地文件头固定以 PK\x03\x04 开头；只有中央目录的空压缩包（PK\x05\x06）
+		// 对备份没有意义，直接按损坏处理。zip64 的首个条目签名同样如此。
+		if !bytes.HasPrefix(head, []byte{'P', 'K', 0x03, 0x04}) {
+			return errors.New("zip 备份缺少本地文件头魔数，可能不是有效压缩包")
 		}
 	}
 	return nil

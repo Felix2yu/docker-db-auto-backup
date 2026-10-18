@@ -43,6 +43,8 @@ type containerPlan struct {
 	dbs       []database
 	command   []string
 	execEnv   []string
+	fileExt   string
+	execUser  string
 	dbDir     string
 	backupDir string
 }
@@ -129,7 +131,8 @@ func backup(ctx context.Context, cfg *config, dc *dockerClient, runAt time.Time)
 	logInfo("容器扫描完成", "total", len(containers), "selected", len(selected),
 		"excluded", excluded, "database", len(plans), "skipped", skipped)
 	for _, name := range unmatched {
-		msg := fmt.Sprintf("容器 %s 疑似数据库但未能识别 provider，已跳过（可用 backup.provider 标签或 BACKUP_IMAGE_PATTERNS_FILE 指定）", name)
+		msg := fmt.Sprintf("容器 %s 疑似数据库但未能识别 provider，已跳过（postgres/mysql/redis 可用 backup.provider 标签或 BACKUP_IMAGE_PATTERNS_FILE 指定；SQLite 应用可在容器内设置 %s，如 \"shenshi backup\"）",
+			name, envSQLiteBackupCmd)
 		logWarn(msg)
 		collector.addWarning(msg)
 	}
@@ -368,6 +371,18 @@ func buildPlans(ctx context.Context, cfg *config, dc *dockerClient, containers [
 			provider = getBackupProvider(names)
 		}
 		if provider == nil {
+			// SQLite 应用自导出：容器通过 BACKUP_SQLITE_CMD 自描述；
+			// 未声明但环境变量里带 .db/sqlite:// 线索的，计入疑似清单而不是静默跳过。
+			declared, likely := probeSQLiteContainer(ctx, dc, c.ID)
+			if declared {
+				provider = providerByName(sqliteProviderName)
+			} else if likely {
+				skipped++
+				unmatched = append(unmatched, name)
+				continue
+			}
+		}
+		if provider == nil {
 			skipped++
 			if isLikelyDatabase(names) {
 				unmatched = append(unmatched, name)
@@ -382,8 +397,12 @@ func buildPlans(ctx context.Context, cfg *config, dc *dockerClient, containers [
 			name:      name,
 			provider:  provider,
 			mode:      modeFull,
+			fileExt:   provider.fileExt,
 			dbDir:     filepath.Join(backupBase, name),
 			backupDir: backupBase,
+		}
+		if provider.prepare != nil {
+			provider.prepare(ctx, dc, c.ID, plan)
 		}
 
 		if cfg.singleDBMode && provider.singleDB != nil {
@@ -448,8 +467,8 @@ func collectTasks(cfg *config, plans []*containerPlan) []backupTask {
 				tasks = append(tasks, backupTask{
 					plan:      plan,
 					db:        &db,
-					filePath:  filepath.Join(dir, fmt.Sprintf("%s.%s%s", db.name, plan.provider.fileExt, compressedExtension(cfg.effectiveCompression()))),
-					fileExt:   plan.provider.fileExt,
+					filePath:  filepath.Join(dir, fmt.Sprintf("%s.%s%s", db.name, plan.fileExt, compressedExtension(cfg.effectiveCompression()))),
+					fileExt:   plan.fileExt,
 					desc:      fmt.Sprintf("%s/%s (%s)", plan.name, db.name, plan.provider.name),
 					container: plan.name,
 					provider:  plan.provider.name,
@@ -460,8 +479,8 @@ func collectTasks(cfg *config, plans []*containerPlan) []backupTask {
 		}
 		tasks = append(tasks, backupTask{
 			plan:      plan,
-			filePath:  filepath.Join(plan.backupDir, fmt.Sprintf("%s.%s%s", plan.name, plan.provider.fileExt, compressedExtension(cfg.effectiveCompression()))),
-			fileExt:   plan.provider.fileExt,
+			filePath:  filepath.Join(plan.backupDir, fmt.Sprintf("%s.%s%s", plan.name, plan.fileExt, compressedExtension(cfg.effectiveCompression()))),
+			fileExt:   plan.fileExt,
 			desc:      fmt.Sprintf("%s (%s)", plan.name, plan.provider.name),
 			container: plan.name,
 			provider:  plan.provider.name,
@@ -589,7 +608,7 @@ func runTaskWithRetry(ctx context.Context, cfg *config, dc *dockerClient, t back
 		if t.db != nil {
 			cmd, env = t.db.command, t.db.env
 		}
-		err := writeBackup(ctx, cfg, dc, t.plan.c.ID, cmd, env, t.filePath, t.fileExt, t.desc, progress)
+		err := writeBackup(ctx, cfg, dc, t.plan.c.ID, cmd, env, t.plan.execUser, t.filePath, t.fileExt, t.desc, progress)
 		if err == nil {
 			return nil
 		}
@@ -613,7 +632,7 @@ func relativeTo(path, base string) string {
 // 单次 dump 落盘（C2 退出码 / C7 临时目录 / A2 超时）
 // ---------------------------------------------------------------------------
 
-func writeBackup(ctx context.Context, cfg *config, dc *dockerClient, containerID string, cmd, env []string, backupFile, fileExt, description string, progress bool) error {
+func writeBackup(ctx context.Context, cfg *config, dc *dockerClient, containerID string, cmd, env []string, user, backupFile, fileExt, description string, progress bool) error {
 	if err := os.MkdirAll(filepath.Dir(backupFile), 0o755); err != nil {
 		return err
 	}
@@ -637,7 +656,7 @@ func writeBackup(ctx context.Context, cfg *config, dc *dockerClient, containerID
 	}
 	defer cancel()
 
-	execID, attach, err := dc.startExec(execCtx, containerID, cmd, env)
+	execID, attach, err := dc.startExec(execCtx, containerID, cmd, env, user)
 	if err != nil {
 		tmp.Close()
 		return fmt.Errorf("创建 exec 失败: %w", err)

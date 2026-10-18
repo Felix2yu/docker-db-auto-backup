@@ -9,8 +9,9 @@
 - MySQL / MariaDB（包括 linuxserver/mariadb、bitnami/mysql、bitnami/mariadb）
 - PostgreSQL（包括 TimescaleDB、pgvecto.rs、pgvector、Nextcloud AIO、pgautoupgrade、Immich Postgres VectorChord、PostGIS 等）
 - Redis / Valkey（包括 bitnami/redis、bitnami/valkey）
+- SQLite（**应用自导出**模式：应用提供 `backup` 子命令输出一致快照，见 [SQLite 备份说明](#sqlite-备份说明)）
 
-未被内置规则识别的镜像，可用容器标签 `backup.provider=postgres|mysql|redis` 声明，或用 `BACKUP_IMAGE_PATTERNS_FILE` 扩展（见[镜像识别扩展](#镜像识别扩展)）。
+未被内置规则识别的镜像，可用容器标签 `backup.provider=postgres|mysql|redis|sqlite` 声明，或用 `BACKUP_IMAGE_PATTERNS_FILE` 扩展（见[镜像识别扩展](#镜像识别扩展)）。
 
 ## 安装
 
@@ -218,6 +219,8 @@ MySQL 单库导出使用 `mysqldump --databases {库名}`，产物自带 `CREATE
 
 这能发现"文件格式合法但无法导入"的问题（扩展版本不匹配、`search_path` 问题等）。锁定镜像 ID 是为了让演练面对的版本与源库一致——否则导入的是"新版本的临时实例"，通过与否都说明不了真实恢复会发生什么。演练失败只作为警告上报，不会让已成功的备份作废。
 
+> SQLite 容器暂不参与恢复演练（演练白名单为 postgres / mysql），其一致性由应用自导出快照保证；如需验证，可直接用 `sqlite3 <备份文件> "PRAGMA integrity_check"` 检查。
+
 注意：演练会临时占用 CPU、内存与磁盘，且向量索引重建可能耗时较长，建议先在非高峰时段试用。
 
 ## 通知（Apprise）
@@ -231,6 +234,67 @@ ntfy 的 Markdown 渲染由 Apprise 的 `?format=markdown` 控制（本项目在
 默认不压缩备份文件（假设底层使用 ZFS 等快照或压缩文件系统）。设置 `$COMPRESSION` 可启用压缩：`gzip` / `lzma` / `xz` / `bz2` / `plain`。
 
 未压缩（`plain`）的备份在校验时只读取文件首尾，不会全量重读，避免大库场景下 IO 翻倍。
+
+## SQLite 备份说明
+
+SQLite 是应用内嵌的文件型数据库，没有服务进程可连、容器里通常也没有 `sqlite3` CLI，因此本项目采用**应用自导出**模式：由应用自己在进程内生成一致快照，写到 stdout，再走与 postgres/mysql 完全相同的落盘、校验、清单、Kopia 与通知管道。
+
+### 为什么不让备份容器直接拷文件
+
+直接复制正在被写入的 `.db`/`-wal`/`-shm`（无论是从宿主机挂载点还是 Docker API）不是原子操作，实测在活跃写入下会周期性产出损坏副本；即使侥幸打开成功，WAL 中已提交的数据也可能丢失。应用进程内用 SQLite 自身的快照能力（`VACUUM INTO` / backup API）导出，是 SQLite 保证的事务级一致视图，WAL 模式下不阻塞写入，也不需要容器内有任何额外二进制或临时空间。
+
+### 识别方式（二选一）
+
+| 方式 | 说明 |
+|------|------|
+| 容器标签 | `backup.provider: sqlite` |
+| 环境变量 | 在应用容器内设置 `BACKUP_SQLITE_CMD`（如 `shenshi backup`），无需标签 |
+
+命令解析优先级：`BACKUP_SQLITE_CMD` > 镜像名同名二进制 + `backup`（约定：`ghcr.io/felix2yu/shenshi` → `shenshi backup`）。命令统一经容器内 `sh -c` 执行。
+
+未声明导出命令、但环境变量里出现 `.db`/`.sqlite` 路径或 `sqlite://` DSN 的容器，会被计入"疑似数据库但未能识别"告警，避免静默漏备份。
+
+### 可选环境变量
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `BACKUP_SQLITE_CMD` | 镜像名推导 | 自导出命令（空格分隔），设置即视为声明 sqlite 容器 |
+| `BACKUP_SQLITE_EXT` | `db` | 产物扩展名。应用把数据与附件一起打成 zip 时设为 `zip`，工具会按 zip 魔数校验并按 `.zip` 命名落盘 |
+| `BACKUP_SQLITE_USER` | 由 `PUID`/`PGID` 推导 | exec 导出命令的用户身份（如 `1000:1000`）。容器未设置 `PUID`/`PGID` 时留空，沿用容器默认用户 |
+
+`BACKUP_SQLITE_USER` 的意义：pg/mysql 的 dump 只读网络，用容器默认用户即可；SQLite 的导出进程会碰数据目录——若应用停止时以 root 身份建立只读连接，会创建属主为 root 的 `-shm`/`-wal`，之后降权运行的应用反而打不开自己的库。因此导出进程应尽量与数据属主同身份（`PUID`/`PGID` 是这类镜像的通用约定）。
+
+### 应用侧约定
+
+应用需实现 `backup` 子命令：在进程内把数据库导出为一致快照并写到 stdout。`VACUUM INTO` 是最简实现（Go 示例）：
+
+```go
+if len(os.Args) > 1 && os.Args[1] == "backup" {
+    dir, _ := os.MkdirTemp("", "app-backup-")
+    defer os.RemoveAll(dir)
+    target := filepath.Join(dir, "snapshot.db")
+
+    db, err := sql.Open("sqlite", dbPath) // 只读打开即可
+    if err != nil { log.Fatal(err) }
+    defer db.Close()
+    if _, err := db.Exec("VACUUM INTO ?", target); err != nil { log.Fatal(err) }
+
+    f, err := os.Open(target)
+    if err != nil { log.Fatal(err) }
+    defer f.Close()
+    if _, err := io.Copy(os.Stdout, f); err != nil { log.Fatal(err) }
+    return
+}
+```
+
+.NET / Python / Node 等运行时的 SQLite 绑定同样提供在线备份 API（如 Python 的 `sqlite3.Connection.backup()`）。
+
+### 限制与注意
+
+- **一个容器一个文件**：产物为 `{BACKUP_DIR}/{日期}/{容器名}.{ext}`，与 `SINGLE_DB_MODE` 无关。默认 `ext=db`（SQLite 快照，按 `SQLite format 3\0` 魔数校验）；输出 zip（数据 + 附件一起打包）时用 `BACKUP_SQLITE_EXT=zip`（按 `PK\x03\x04` 魔数校验）。**扩展名必须与产物一致**：应用输出 zip 却按默认 `db` 校验会失败并丢弃产物（这是有意为之，不允许把 zip 当 SQLite 存下来）。
+- **`backup` 子命令应在应用 `main()` 最前面拦截**，早于任何存储初始化/迁移，避免 exec 进程重复初始化或以错误身份写数据目录。
+- **exec 身份**：`docker exec` 不经过 ENTRYPOINT，默认以容器配置的用户运行（通常是 root）。建议按上文设置 `BACKUP_SQLITE_USER` 或让 compose 提供 `PUID`/`PGID`，避免 exec 进程在数据目录里创建属主错误的文件。
+- **恢复**：`db` 产物放回数据目录并重启应用即可（`VACUUM INTO` 产物的 `journal_mode` 为默认 delete 模式，应用启动时会按自身逻辑重新切换 WAL）；`zip` 产物用应用自己的导入功能恢复（如 Web UI 上传）。
 
 ## Redis / Valkey 备份说明
 
