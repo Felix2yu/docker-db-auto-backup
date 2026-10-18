@@ -65,7 +65,9 @@ buildPlans → provider.prepare / provider.backupMethod
 | 容器标签 | `backup.provider=sqlite`（既有机制，注册 provider 后自动生效） |
 | 环境变量 | 容器设置 `BACKUP_SQLITE_CMD`（如 `shenshi backup`）即视为声明，`probeSQLiteContainer` 在计划阶段探测 |
 
-命令解析优先级：`BACKUP_SQLITE_CMD` > 镜像名同名二进制 + `backup`（`ghcr.io/owner/app:tag` → `app backup`，取 basename 并用 `sqliteBinaryNamePattern` 约束字符集，防 shell 注入）。命令统一经容器内 `sh -c` 执行——`docker exec` 的任务命令不保证做 PATH 查找。
+命令解析优先级：`BACKUP_SQLITE_CMD` > 镜像名同名二进制 + `backup`（`ghcr.io/owner/app:tag` → `app backup`，取 basename 并用 `sqliteBinaryNamePattern` 约束字符集，防 shell 注入）。命令统一经容器内 `sh -c` 执行——`docker exec` 的任务命令不保证做 PATH 查找，因此镜像名推导要求该名字在容器 `PATH` 上；二进制装在 `/app` 等非标准目录的应用（实测：liuxia、yuexi）只能显式写绝对路径。
+
+**两条识别路径能力不对称**（实测，非设计意图）：镜像名推导只在打了 `backup.provider=sqlite` 标签时可达。不打标签时，识别完全依赖 `BACKUP_SQLITE_CMD`——没设它的容器会先被 `probeSQLiteContainer` 判为"疑似"并 `continue`，永远走不到推导分支（`buildPlans`）。这是有意的保守取舍：不对陌生镜像执行猜出来的命令，代价是应用实现了 `backup` 子命令却漏配变量时只会告警、不会备份。
 
 **防漏备份**：未声明导出命令、但环境变量值里出现 `.db`/`.sqlite`/`.sqlite3` 后缀或 `sqlite://` DSN 的容器，会被计入 `unmatched`，在日志与通知里提示「疑似 SQLite 但未能识别」，而不是静默跳过。探测走 `containerEnv`（带缓存、10s 超时、失败静默），不改变其它容器的行为。
 
@@ -120,11 +122,22 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 应用需实现 `backup` 子命令：
 
 - 在 `main()` 最前面拦截，早于存储初始化/迁移（导出进程不该改 schema）；
-- 只读/不迁移地打开数据库；
+- 只读/不迁移地打开数据库；数据文件不存在时报错，不建目录、不产空库；
 - `VACUUM INTO` 到临时目录，再把文件流式写到 stdout；
-- 日志走 stderr，stdout 只承载备份数据。
+- 日志走 stderr，stdout 只承载备份数据；
+- 命令必须能被容器内的 `sh -c` 解析：二进制在 `PATH` 上写裸名，否则用绝对路径。
 
 各应用可在此基础上扩展：shenshi 的 `shenshi backup` 默认输出「JSON + 附件」的 zip（可经界面导入还原），`--format db` 输出 SQLite 快照；导出打开方式为 `store.OpenForExport`（跳过迁移与种子写入）。
+
+已接入的应用（均按 §8 的方式做过容器级实测）：
+
+| 应用 | 导出命令 | 产物 | 库外文件 |
+|------|----------|------|----------|
+| shenshi | `shenshi backup` | zip（`BACKUP_SQLITE_EXT=zip`） | 附件已含 |
+| feixi / chaxin / guanfu | `<bin> backup` | db | 无库外状态 |
+| liuxia | `/app/liuxia backup` | db | 无库外状态（二进制不在 PATH） |
+| yuexi | `/app/yuexi backup` | db | 无库外状态（二进制不在 PATH） |
+| qiansi / mujian | `<bin> backup [--format zip]` | db，zip 为可选 | uploads 仅在 zip 形态下覆盖 |
 
 ---
 
@@ -150,9 +163,16 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 
 1. shenshi 容器（用户 1000，WAL 模式）运行中经 `docker exec` 导出：`PRAGMA integrity_check` 通过，刚提交（尚在 `-wal` 中）的任务出现在快照里；
 2. 工具以 `BACKUP_SQLITE_CMD` 自动识别并完成备份：zip 与 db 两种产物均落盘、校验通过、清单记录 `provider: sqlite`；
-3. 崩溃恢复场景（`kill -9` 后删除 `-shm`）：工具以 `PUID:PUID` 身份执行，重建的 `-shm` 属主正确，应用可再次启动；
-4. 恢复演练：把备份的 `.db` 放回 `-v` 挂载的数据目录，应用正常启动并读到数据；
-5. 反例：应用输出 zip 而未声明 `BACKUP_SQLITE_EXT=zip` → 校验失败、产物丢弃、本轮标记 failed（不静默存坏备份）。
+3. exec 身份：用 `BACKUP_SQLITE_CMD="id > /data/identity.txt; shenshi backup --format db"` 让导出进程自己回报身份，三种配置（显式 `BACKUP_SQLITE_USER`、仅 `PUID`/`PGID`、两者都不设）都是 `uid=1000(app)`——公共基镜烘入了 `ENV PUID=1000 PGID=1000`，所以零配置也能与数据属主一致。作为对照，`docker exec <c> id` 不带 `-u` 是 `uid=0(root)`，即镜像默认 exec 身份确实是 root，派生逻辑不是可有可无的；
+4. 并发写压：导出期间持续写入数百次，快照 `integrity_check` 为 ok，最近一次已提交（仍在 `-wal`）的行被包含，快照行数（413）与实时行数（709）之差即导出瞬间之后新写的数据——中途一致视图，无撕裂；
+5. 恢复：备份的 zip 经应用「导入备份」还原（任务与附件都回来）；把 `.db` 快照放回数据目录后应用正常启动并读到全部行，并按自身逻辑切回 WAL；
+6. 反例：应用输出 zip 而未声明 `BACKUP_SQLITE_EXT=zip` → 校验失败、产物丢弃、本轮标记 failed（不静默存坏备份）；
+7. 压缩叠加：`COMPRESSION=gzip` 下 zip / db 产物均通过——校验先解压再查内层魔数（`validateBackupFile`）；
+8. 标签路径：只打 `backup.provider=sqlite`、不给任何 `BACKUP_SQLITE_*` 变量，工具按镜像名推出 `shenshi backup` 并真实执行（产物是 zip，被默认 `.db` 校验拒绝，恰好反证命令确实跑了；补 `BACKUP_SQLITE_EXT=zip` 后成功落盘）；
+9. 恢复演练：sqlite 容器跳过，`LOG_LEVEL=debug` 下可见「恢复演练暂不支持该类型，已跳过 provider=sqlite」（info 级不可见）；
+10. 多应用同轮：feixi / chaxin / guanfu / liuxia / yuexi 五个容器在同一轮里 `database=5 skipped=0`，`COMPRESSION=gzip` 下 5/5 成功，逐个解开后魔数、`integrity_check` 与 schema 齐全。
+
+> 修正一条早期记录：原写「`kill -9` 后删除 `-shm`，工具重建的 `-shm` 属主正确」。实测复现不出该场景——导出进程干净退出时会把 `-wal` checkpoint 回主库并删除 `-wal`/`-shm`，因此不会留下任何属主错误的旁文件。身份派生本身仍然有效（见第 3 条），这也是它存在的理由：若导出进程中途被杀，root 身份建的 `-shm` 会挡住降权运行的应用。
 
 ---
 

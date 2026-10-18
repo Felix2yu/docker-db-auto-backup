@@ -250,7 +250,12 @@ SQLite 是应用内嵌的文件型数据库，没有服务进程可连、容器�
 | 容器标签 | `backup.provider: sqlite` |
 | 环境变量 | 在应用容器内设置 `BACKUP_SQLITE_CMD`（如 `shenshi backup`），无需标签 |
 
-命令解析优先级：`BACKUP_SQLITE_CMD` > 镜像名同名二进制 + `backup`（约定：`ghcr.io/felix2yu/shenshi` → `shenshi backup`）。命令统一经容器内 `sh -c` 执行。
+导出命令：`BACKUP_SQLITE_CMD` 原样生效；未设置时按镜像名推导同名二进制 + `backup`（约定：`ghcr.io/felix2yu/shenshi` → `shenshi backup`）。命令统一经容器内 `sh -c` 执行，因此**推导出的名字必须能被容器内 shell 解析**——二进制装在 `/app` 这类不在 `PATH` 里的目录时，镜像名推导无法工作，只能用绝对路径显式声明 `BACKUP_SQLITE_CMD=/app/myapp backup`。
+
+两条识别路径能做到的事不同，据实测：
+
+- 打了 `backup.provider: sqlite` 标签：镜像名推导可达，只配标签即可备份（前提是名字能被解析）。
+- 不打标签、只靠环境变量：`BACKUP_SQLITE_CMD` 是唯一入口。没设它的容器会被归入下面的"疑似"清单并跳过，**不会**再用镜像名推导去试——宁可告警也不对陌生镜像执行猜出来的命令。
 
 未声明导出命令、但环境变量里出现 `.db`/`.sqlite` 路径或 `sqlite://` DSN 的容器，会被计入"疑似数据库但未能识别"告警，避免静默漏备份。
 
