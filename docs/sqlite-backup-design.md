@@ -65,7 +65,7 @@ buildPlans → provider.prepare / provider.backupMethod
 | 容器标签 | `backup.provider=sqlite`（既有机制，注册 provider 后自动生效） |
 | 环境变量 | 容器设置 `BACKUP_SQLITE_CMD`（如 `shenshi backup`）即视为声明，`probeSQLiteContainer` 在计划阶段探测 |
 
-命令解析优先级：`BACKUP_SQLITE_CMD` > 镜像名同名二进制 + `backup`（`ghcr.io/owner/app:tag` → `app backup`，取 basename 并用 `sqliteBinaryNamePattern` 约束字符集，防 shell 注入）。命令统一经容器内 `sh -c` 执行——`docker exec` 的任务命令不保证做 PATH 查找，因此推导出的名字必须在容器 `PATH` 上；基镜契约本就要求 `COPY bin/app /usr/local/bin/app`，守约的镜像无需任何额外配置。
+命令解析优先级：`BACKUP_SQLITE_CMD` > 镜像名同名二进制 + `backup`（`ghcr.io/owner/app:tag` → `app backup`，取 basename 并用 `sqliteBinaryNamePattern` 约束字符集，防 shell 注入）。命令统一经容器内 `sh -c` 执行——`docker exec` 的任务命令不保证做 PATH 查找，因此推导出的名字必须在容器 `PATH` 上。本舰队的镜像把二进制装在 `/app`（不在 `PATH`，见 §7.2），所以镜像名推导在这里不成立，`BACKUP_SQLITE_CMD` 一律写绝对路径。
 
 **两条识别路径能力不对称**（实测，非设计意图）：镜像名推导只在打了 `backup.provider=sqlite` 标签时可达。不打标签时，识别完全依赖 `BACKUP_SQLITE_CMD`——没设它的容器会先被 `probeSQLiteContainer` 判为"疑似"并 `continue`，永远走不到推导分支（`buildPlans`）。这是有意的保守取舍：不对陌生镜像执行猜出来的命令，代价是应用实现了 `backup` 子命令却漏配变量时只会告警、不会备份。
 
@@ -125,11 +125,11 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 - 只读/不迁移地打开数据库；数据文件不存在时报错，不建目录、不产空库；
 - `VACUUM INTO` 到临时目录，再把文件流式写到 stdout；
 - 日志走 stderr，stdout 只承载备份数据；
-- 命令必须能被容器内的 `sh -c` 解析：二进制在 `PATH` 上写裸名，否则用绝对路径。
+- 命令必须能被容器内的 `sh -c` 解析：本舰队的镜像把二进制装在 `/app`（不在 `PATH` 上），所以一律写绝对路径 `/app/<app> backup`。
 
-各应用可在此基础上扩展：shenshi 的 `shenshi backup` 默认输出「JSON + 附件」的 zip（可经界面导入还原），`--format db` 输出 SQLite 快照；导出打开方式为 `store.OpenForExport`（跳过迁移与种子写入）。
+各应用可在此基础上扩展：shenshi 的 `/app/shenshi backup` 默认输出「JSON + 附件」的 zip（可经界面导入还原），`--format db` 输出 SQLite 快照；导出打开方式为 `store.OpenForExport`（跳过迁移与种子写入）。
 
-已接入的应用（验证口径见下）。导出命令一律是 `<二进制名> backup`：
+已接入的应用（验证口径见下）。导出命令一律是 `/app/<二进制名> backup`：
 
 | 应用 | 产物 | 库外文件 | 容器级实测 |
 |------|------|----------|------------|
@@ -142,15 +142,26 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 | huozhi | db，zip 可选 | `uploads/` 账单图片；驱动切 Postgres 时拒绝导出 | 是（db 与 zip 两态） |
 | bili-history | **zip 为唯一形态** | 六个库打进一个包；库外图片/下载目录不进包 | 是（含漏设 `EXT=zip` 的反面用例） |
 
-> **命令写法的统一**：liuxia / yuexi / mujian / diarum / huozhi / bili-history 原先把二进制装在
-> `/app`（不在 PATH 上），导出命令必须写绝对路径，与其余应用不一致。基镜契约本来就是
-> `COPY bin/app /usr/local/bin/app` + `CMD ["app", ...]`，六者已改回契约形态，
-> 于是全族命令同为 `<bin> backup`。副作用是镜像名推导从此对每个应用都成立——
-> 实测一个只打 `backup.provider=sqlite` 标签、不设任何 `BACKUP_SQLITE_*` 的
-> liuxia 容器可正常识别并备份成功。
+> **容器布局标准（本文档一度写反过，记下来免得再翻）**：本轮先按 `.github/docs/docker.md`
+> 当时的写法（`COPY bin/app /usr/local/bin/app` + 裸名 `CMD`）把六个装在 `/app` 的应用移到
+> `/usr/local/bin`，随后 owner 定了新标准——**二进制在 `/app/<app>`、数据在 `/app/data`**，
+> 于是十一个应用现在全部回到 `/app`，`.github/docs/docker.md` 的模板与装配图已同步改掉。
 >
-> 唯一例外是 huozhi：它的二进制名是 `huozhi-server`，与镜像名 `huozhi` 不同，镜像名推导
-> 必然猜错，所以它的 `BACKUP_SQLITE_CMD` 必须显式声明，不能当成可省略的冗余配置。
+> 直接后果是：`docker exec <c> <app> backup` 这类裸名解析一律 `command not found`（实测 exit
+> 127），**镜像名推导与"只打标签就自动生效"这条路对本舰队不成立**，`BACKUP_SQLITE_CMD`
+> 必须写绝对路径。上一条记录里「只打 backup.provider=sqlite 标签的 liuxia 容器也能备份成功」
+> 是二进制在 `/usr/local/bin` 期间的观测，已随标准变更失效。
+>
+> huozhi 还有一层：它的二进制名是 `huozhi-server`，与镜像名 `huozhi` 不同，即使装上 PATH
+> 镜像名推导也会猜错，所以它的命令声明是必须的而不是冗余。
+>
+> **数据目录**：shenshi / feixi / chaxin / guanfu / qiansi 原先挂在 `/data`，现已统一到
+> `/app/data`。迁移只改 compose 里容器侧的挂载点，**卷名与宿主目录保持不变**，因此
+> `docker compose up -d` 即无损搬迁——实测把同一个具名卷从 `/data` 换挂到 `/app/data` 后，
+> 先前写入的行照常读出。注意两点：各 Dockerfile 必须显式设 `APP_DATA_DIR=/app/data`（基镜
+> baked 的默认值仍是 `/data`，不动它是为了不牵动别的容器，漏设就会 chown 错目录）；基镜入口
+> 还会把 `HOME` 指到 `APP_DATA_DIR`，以后任何写 `$HOME` 的行为都落在挂载卷里。
+> 二进制保持 root 属主（实测十一个镜像均为 `0:0`），运行身份不该能改写自己的可执行文件。
 >
 > mujian 的镜像改动需要真实 cgo 二进制才能验证（webp/avif 无法 `CGO_ENABLED=0`
 > 交叉编译）：用 `golang:1.27-bookworm` 容器挂宿主 module cache 离线编译出
@@ -186,7 +197,7 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 5. 恢复：备份的 zip 经应用「导入备份」还原（任务与附件都回来）；把 `.db` 快照放回数据目录后应用正常启动并读到全部行，并按自身逻辑切回 WAL；
 6. 反例：应用输出 zip 而未声明 `BACKUP_SQLITE_EXT=zip` → 校验失败、产物丢弃、本轮标记 failed（不静默存坏备份）；
 7. 压缩叠加：`COMPRESSION=gzip` 下 zip / db 产物均通过——校验先解压再查内层魔数（`validateBackupFile`）；
-8. 标签路径：只打 `backup.provider=sqlite`、不给任何 `BACKUP_SQLITE_*` 变量，工具按镜像名推出 `shenshi backup` 并真实执行（产物是 zip，被默认 `.db` 校验拒绝，恰好反证命令确实跑了；补 `BACKUP_SQLITE_EXT=zip` 后成功落盘）；
+8. 标签路径：只打 `backup.provider=sqlite`、不给任何 `BACKUP_SQLITE_*` 变量，工具按镜像名推出 `shenshi backup` 并真实执行（产物是 zip，被默认 `.db` 校验拒绝，恰好反证命令确实跑了；补 `BACKUP_SQLITE_EXT=zip` 后成功落盘）。**该观测成立于二进制当时在 `/usr/local/bin` 的镜像**；容器布局改为 `/app` 后裸名不可解析（`command not found`，exit 127），这条路对本舰队不再可用，见 §7.2；
 9. 恢复演练：sqlite 容器跳过，`LOG_LEVEL=debug` 下可见「恢复演练暂不支持该类型，已跳过 provider=sqlite」（info 级不可见）；
 10. 多应用同轮：feixi / chaxin / guanfu / liuxia / yuexi / qiansi / qiansi（zip 态）/ shenshi 八个容器在同一轮里 `database=8 skipped=0`，`COMPRESSION=gzip` 下 8/8 成功；`.db` 逐个解开后魔数、`integrity_check`、schema 齐全，`.zip` 解开后确认包内快照与 `uploads/` 文件字节一致，扩展名按各容器声明分别落盘；
 11. 压缩叠加第二种算法：`COMPRESSION=xz` 下同样 5/5 通过；
@@ -194,6 +205,7 @@ pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的�
 13. 第二批接入合测：bili-history / diarum / huozhi 三个容器同轮 3/3 成功，`.db` 与 `.zip` 各自按声明落盘；zip 形态把库外文件也带上并回读字节一致（diarum 的 `storage/**/pic.png`、huozhi 的 `uploads/1/invoice.png`），包内的 SQLite 条目单独解开仍 `integrity_check` 通过；
 14. 多库容器：一个只建出 2 个库的 bili-history 容器，其余 4 个可选库缺席时告警跳过、产物依然是有效的两条目 zip；反过来，同一容器不声明 `BACKUP_SQLITE_EXT=zip` 时校验失败、产物丢弃、本轮标记 failed——证明「一个容器一个文件」这条边界靠扩展名声明而不是靠猜；
 15. 驱动分支：huozhi 容器在 `HZ_DB_DRIVER=postgres` 下 `backup` 以 exit 1、stdout 0 字节拒绝，避免对着 Postgres 部署产出一份「看起来合法」的 SQLite 快照。
+16. 布局改造后的全舰队同轮：十一个应用按「二进制 `/app/<app>` + 数据 `/app/data`（bili-history 保留 `/app/output`）」重新构建镜像，容器全部 running，`docker exec <c> ls -ln /app/<app>` 逐个确认二进制属主 `0:0`、数据目录 `1000:1000`；一轮 `database=11 skipped=0`、11/11 成功，9 份 `.db` 逐个 `integrity_check` 通过（对象数 8–106），2 份 `.zip`（shenshi、bili-history）分别确认条目内容——bili-history 在全新卷里产出 2 个库条目、4 个可选库缺席只告警。裸名 `docker exec <c> sh -c '<app> backup'` 在十一个容器里都是 exit 127，证明绝对路径声明是必须的而不是保守。
 
 > 修正一条早期记录：原写「`kill -9` 后删除 `-shm`，工具重建的 `-shm` 属主正确」。实测复现不出该场景——导出进程干净退出时会把 `-wal` checkpoint 回主库并删除 `-wal`/`-shm`，因此不会留下任何属主错误的旁文件。身份派生本身仍然有效（见第 3 条），这也是它存在的理由：若导出进程中途被杀，root 身份建的 `-shm` 会挡住降权运行的应用。
 
