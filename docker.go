@@ -178,7 +178,7 @@ func (dc *dockerClient) hasBinary(ctx context.Context, containerID, binary strin
 	}
 	dc.mu.Unlock()
 
-	execID, attach, err := dc.startExec(ctx, containerID, []string{"which", binary}, nil)
+	execID, attach, err := dc.startExec(ctx, containerID, []string{"which", binary}, nil, "")
 	if err != nil {
 		return false, err
 	}
@@ -211,7 +211,7 @@ func (dc *dockerClient) execExitCode(ctx context.Context, execID string) (int, e
 }
 
 func (dc *dockerClient) execCollect(ctx context.Context, containerID string, cmd, env []string) ([]byte, error) {
-	execID, attach, err := dc.startExec(ctx, containerID, cmd, env)
+	execID, attach, err := dc.startExec(ctx, containerID, cmd, env, "")
 	if err != nil {
 		return nil, err
 	}
@@ -230,10 +230,11 @@ func (dc *dockerClient) execCollect(ctx context.Context, containerID string, cmd
 	return stdout.Bytes(), nil
 }
 
-func (dc *dockerClient) startExec(ctx context.Context, containerID string, cmd, env []string) (string, client.HijackedResponse, error) {
+func (dc *dockerClient) startExec(ctx context.Context, containerID string, cmd, env []string, user string) (string, client.HijackedResponse, error) {
 	resp, err := dc.api.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		Cmd:          cmd,
 		Env:          env,
+		User:         user,
 		AttachStdout: true,
 		AttachStderr: true,
 		TTY:          false,

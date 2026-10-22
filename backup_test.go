@@ -172,7 +172,7 @@ func TestWriteBackupEmpty(t *testing.T) {
 	dc := newFakeDockerClient(fake)
 	cfg := testBackupConfig(t)
 	base := t.TempDir()
-	err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall", "-U", "postgres"}, nil,
+	err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall", "-U", "postgres"}, nil, "",
 		filepath.Join(base, "pg.sql"), "sql", "pg (postgres)", false)
 	if err == nil {
 		t.Fatal("空备份应返回错误")
@@ -197,7 +197,7 @@ func TestWriteBackupValidationFailure(t *testing.T) {
 	dc := newFakeDockerClient(fake)
 	cfg := testBackupConfig(t)
 	base := t.TempDir()
-	err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall", "-U", "postgres"}, nil,
+	err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall", "-U", "postgres"}, nil, "",
 		filepath.Join(base, "pg.sql"), "sql", "pg (postgres)", false)
 	if err == nil {
 		t.Fatal("校验失败应返回错误")
@@ -212,7 +212,7 @@ func TestWriteBackupWithCompression(t *testing.T) {
 	cfg := testBackupConfig(t)
 	cfg.compression = "gzip"
 	base := t.TempDir()
-	if err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall", "-U", "postgres"}, nil,
+	if err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall", "-U", "postgres"}, nil, "",
 		filepath.Join(base, "pg.sql.gz"), "sql", "pg (postgres)", false); err != nil {
 		t.Fatalf("压缩备份失败: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestWriteBackupStartExecError(t *testing.T) {
 	dc := newFakeDockerClient(fake)
 	cfg := testBackupConfig(t)
 	base := t.TempDir()
-	if err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall"}, nil,
+	if err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall"}, nil, "",
 		filepath.Join(base, "pg.sql"), "sql", "pg", false); err == nil {
 		t.Fatal("导出命令失败应返回错误")
 	}
@@ -246,7 +246,7 @@ func TestWriteBackupNonZeroExit(t *testing.T) {
 	dc := newFakeDockerClient(fake)
 	cfg := testBackupConfig(t)
 	base := t.TempDir()
-	err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall"}, nil,
+	err := writeBackup(context.Background(), cfg, dc, cid, []string{"pg_dumpall"}, nil, "",
 		filepath.Join(base, "pg.sql"), "sql", "pg", false)
 	if err == nil {
 		t.Fatal("退出码非 0 应判为失败")
@@ -401,7 +401,7 @@ func TestWriteBackupTimeoutInterruptsStalledStream(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- writeBackup(context.Background(), cfg, dc, "c1",
-			[]string{"pg_dumpall"}, nil, target, "sql", "pg (postgres)", false)
+			[]string{"pg_dumpall"}, nil, "", target, "sql", "pg (postgres)", false)
 	}()
 
 	select {

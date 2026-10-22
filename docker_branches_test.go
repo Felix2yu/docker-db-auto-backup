@@ -224,7 +224,7 @@ func TestDockerAPIErrorPaths(t *testing.T) {
 	fake := newFakeAPIClient()
 	fake.execCreateErr = errors.New("container not running")
 	dc := newFakeDockerClient(fake)
-	if _, _, err := dc.startExec(ctx, "c1", []string{"env"}, nil); err == nil {
+	if _, _, err := dc.startExec(ctx, "c1", []string{"env"}, nil, ""); err == nil {
 		t.Error("ExecCreate 失败应返回错误")
 	}
 	if _, err := dc.execCollect(ctx, "c1", []string{"env"}, nil); err == nil {
@@ -234,14 +234,14 @@ func TestDockerAPIErrorPaths(t *testing.T) {
 		t.Errorf("hasBinary 应报错, got %v %v", ok, err)
 	}
 	if err := writeBackup(ctx, &config{backupDir: t.TempDir(), compression: "plain"}, dc, "c1",
-		[]string{"pg_dumpall"}, nil, "/tmp/x.sql", "sql", "pg", false); err == nil {
+		[]string{"pg_dumpall"}, nil, "", "/tmp/x.sql", "sql", "pg", false); err == nil {
 		t.Error("writeBackup 应报告创建 exec 失败")
 	}
 
 	fake = newFakeAPIClient()
 	fake.execAttachErr = errors.New("attach refused")
 	dc = newFakeDockerClient(fake)
-	if _, _, err := dc.startExec(ctx, "c1", []string{"env"}, nil); err == nil {
+	if _, _, err := dc.startExec(ctx, "c1", []string{"env"}, nil, ""); err == nil {
 		t.Error("ExecAttach 失败应返回错误")
 	}
 	if ok, err := dc.hasBinary(ctx, "c1", "mysqldump"); err == nil || ok {

@@ -84,3 +84,36 @@ func TestNewCompressWriterUnknown(t *testing.T) {
 		t.Error("未知算法应返回错误")
 	}
 }
+
+func TestIsValidCompression(t *testing.T) {
+	for _, algo := range []string{"", "gzip", "lzma", "xz", "bz2", "plain"} {
+		if !isValidCompression(algo) {
+			t.Errorf("%q 应当受支持", algo)
+		}
+	}
+	for _, algo := range []string{"zstd", "unknown-algo", "GZIP", " gzip"} {
+		if isValidCompression(algo) {
+			t.Errorf("%q 不应通过校验", algo)
+		}
+	}
+}
+
+// TestCompressionAlgorithmsMatchWriter 保证启动校验用的集合与 newCompressWriter
+// 真正支持的算法不脱节：往 compress.go 增加一种算法时这一条会提示同步校验表。
+func TestCompressionAlgorithmsMatchWriter(t *testing.T) {
+	for algo := range compressionAlgorithms {
+		w, err := newCompressWriter(&bytes.Buffer{}, algo)
+		if err != nil {
+			t.Errorf("校验表放行的 %q 无法创建 writer: %v", algo, err)
+			continue
+		}
+		w.Close()
+	}
+	for _, algo := range []string{"zstd", "lz4"} {
+		if _, err := newCompressWriter(&bytes.Buffer{}, algo); err == nil {
+			t.Errorf("writer 支持 %q，校验表却拒绝它", algo)
+		} else if isValidCompression(algo) {
+			t.Errorf("%q 被校验表放行但 writer 不支持", algo)
+		}
+	}
+}

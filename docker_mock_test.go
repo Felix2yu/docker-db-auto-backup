@@ -59,6 +59,7 @@ type execResult struct {
 	stderr []byte
 	exit   int
 	cmd    []string
+	user   string
 }
 
 // fakeAPIClient 通过嵌入 client.APIClient 接口来满足其全部方法，
@@ -74,6 +75,9 @@ type fakeAPIClient struct {
 	execs        map[string]*execResult
 	seq          int
 	listErr      error
+
+	// lastExecUser 记录最近一次 ExecCreate 指定的执行用户，用于断言 exec 身份。
+	lastExecUser string
 
 	// attachReader/attachConn 覆盖 ExecAttach 返回的流，用于测试"读取挂住"的场景。
 	attachReader *bufio.Reader
@@ -150,7 +154,8 @@ func (f *fakeAPIClient) ExecCreate(ctx context.Context, id string, opts client.E
 	f.seq++
 	eid := fmt.Sprintf("exec-%d", f.seq)
 	stdout, stderr, exit := f.execHandler(opts.Cmd)
-	f.execs[eid] = &execResult{stdout: stdout, stderr: stderr, exit: exit, cmd: opts.Cmd}
+	f.lastExecUser = opts.User
+	f.execs[eid] = &execResult{stdout: stdout, stderr: stderr, exit: exit, cmd: opts.Cmd, user: opts.User}
 	return client.ExecCreateResult{ID: eid}, nil
 }
 

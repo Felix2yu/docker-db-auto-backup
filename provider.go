@@ -6,6 +6,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type database struct {
@@ -21,6 +22,9 @@ type backupProvider struct {
 	fileExt      string
 	backupMethod func(ctx context.Context, cfg *config, dc *dockerClient, containerID string) ([]string, []string, error)
 	singleDB     func(ctx context.Context, cfg *config, dc *dockerClient, containerID string) ([]database, error)
+	// prepare 在生成备份计划时补充容器特有的元数据（产物扩展名、exec 用户等）。
+	// 为空表示该 provider 无此类需求。
+	prepare func(ctx context.Context, dc *dockerClient, containerID string, plan *containerPlan)
 }
 
 var systemDatabasesPostgres = map[string]bool{
@@ -317,6 +321,187 @@ func mysqlCredentials(cfg *config, env map[string]string) (user, password string
 	return user, password, nil
 }
 
+// ---------------------------------------------------------------------------
+// SQLite（应用自导出）
+// ---------------------------------------------------------------------------
+
+// SQLite 不是服务型数据库，没有可 exec 的 dump 工具可用（应用镜像通常也不带 sqlite3 CLI），
+// 因此采用「应用自导出」约定：应用提供 backup 子命令，在进程内用 SQLite 的 backup API /
+// VACUUM INTO 生成事务级一致快照，并把快照写到 stdout，由本工具的现有管道落盘。
+//
+// 相比从容器外热拷贝 db/-wal/-shm，进程内导出是 SQLite 自己保证的一致快照：
+// WAL 模式下不阻塞写入，也不需要容器内临时空间或额外二进制。
+
+const sqliteProviderName = "sqlite"
+
+// envSQLiteBackupCmd 是应用容器自描述的导出命令（空格分隔），例如：
+//
+//	BACKUP_SQLITE_CMD="shenshi backup"
+//
+// 设置该变量的容器会被自动识别为 sqlite provider，无需打 backup.provider 标签。
+const envSQLiteBackupCmd = "BACKUP_SQLITE_CMD"
+
+// envSQLiteBackupExt 覆盖产物文件扩展名（默认 db）。应用把数据与附件一起导出成
+// zip（如 shenshi）时设为 zip，工具会按 zip 魔数校验并按 .zip 命名落盘。
+const envSQLiteBackupExt = "BACKUP_SQLITE_EXT"
+
+// envSQLiteUser 指定 exec 导出命令的用户身份（形如 1000:1000 或用户名）。
+// 缺省时尝试从 PUID/PGID 推导，让导出进程与数据属主一致。
+const envSQLiteUser = "BACKUP_SQLITE_USER"
+
+// sqliteFileExtPattern 限制扩展名只能是字母数字，避免把路径分隔符带进文件名。
+var sqliteFileExtPattern = regexp.MustCompile(`^[A-Za-z0-9]{1,16}$`)
+
+// sqliteProbeTimeout 限制识别阶段的 env 探测，避免个别容器拖住整轮备份。
+const sqliteProbeTimeout = 10 * time.Second
+
+// sqliteBinaryNamePattern 约束从镜像名推导出的二进制名，防止拼接进 sh -c 时被注入。
+var sqliteBinaryNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// sqliteBackupCommand 生成 SQLite 备份命令（E 方案：应用自导出）。
+//
+// 命令来源优先级：
+//  1. 容器环境变量 BACKUP_SQLITE_CMD（应用自描述，推荐）
+//  2. 镜像名同名二进制 + backup（约定：felix2yu/shenshi → shenshi backup）
+//
+// 统一用 sh -c 执行：exec 的任务命令不保证做 PATH 查找，且应用镜像常把二进制
+// 放在非标准目录，交给容器内的 shell 解析更可靠（应用镜像均为 alpine/debian，必有 sh）。
+func sqliteBackupCommand(ctx context.Context, cfg *config, dc *dockerClient, containerID string) ([]string, []string, error) {
+	if env, err := dc.containerEnv(ctx, containerID); err != nil {
+		logDebug("读取容器环境变量失败，改用镜像名推导 SQLite 备份命令", "container", containerID, "error", err)
+	} else if declared := strings.TrimSpace(env[envSQLiteBackupCmd]); declared != "" {
+		return []string{"sh", "-c", declared}, nil, nil
+	}
+
+	bin, err := sqliteBinaryName(ctx, dc, containerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return []string{"sh", "-c", bin + " backup"}, nil, nil
+}
+
+// sqliteBinaryName 按约定从镜像名推导应用二进制名：
+// ghcr.io/felix2yu/shenshi:latest → felix2yu/shenshi → shenshi。
+func sqliteBinaryName(ctx context.Context, dc *dockerClient, containerID string) (string, error) {
+	names, err := dc.containerImageNames(ctx, containerID)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		base := path.Base(name)
+		if sqliteBinaryNamePattern.MatchString(base) {
+			return base, nil
+		}
+	}
+	return "", fmt.Errorf("无法从镜像名推导 SQLite 备份命令，请在应用容器设置 %s（如 \"myapp backup\"）", envSQLiteBackupCmd)
+}
+
+// probeSQLiteContainer 读取容器环境变量，判断它是否声明或疑似 SQLite 容器。
+//
+// declared：容器设置了 BACKUP_SQLITE_CMD，可直接接入备份；
+// likely：环境变量里出现 .db/.sqlite 路径或 sqlite:// DSN，但未声明导出命令——
+// 用于提示"疑似 SQLite 容器未被识别"，避免静默漏备份。
+func probeSQLiteContainer(ctx context.Context, dc *dockerClient, containerID string) (declared, likely bool) {
+	probeCtx, cancel := context.WithTimeout(ctx, sqliteProbeTimeout)
+	defer cancel()
+
+	env, err := dc.containerEnv(probeCtx, containerID)
+	if err != nil {
+		logDebug("读取容器环境变量失败，跳过 SQLite 识别", "container", containerID, "error", err)
+		return false, false
+	}
+	if strings.TrimSpace(env[envSQLiteBackupCmd]) != "" {
+		return true, true
+	}
+	for _, v := range env {
+		if sqlitePathLikeValue(v) {
+			return false, true
+		}
+	}
+	return false, false
+}
+
+// sqlitePathLikeValue 判断环境变量值是否像 SQLite 数据库路径或 DSN。
+func sqlitePathLikeValue(v string) bool {
+	lower := strings.ToLower(strings.TrimSpace(v))
+	if lower == "" {
+		return false
+	}
+	if strings.HasPrefix(lower, "sqlite://") || strings.HasPrefix(lower, "sqlite3://") {
+		return true
+	}
+	for _, suffix := range []string{".db", ".sqlite", ".sqlite3"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// prepareSQLitePlan 在计划阶段解析 SQLite 容器的可选声明，
+// 把产物扩展名与 exec 用户固化到计划里，后续落盘与执行直接使用。
+func prepareSQLitePlan(ctx context.Context, dc *dockerClient, containerID string, plan *containerPlan) {
+	if ext := sqliteFileExt(ctx, dc, containerID); ext != "" {
+		plan.fileExt = ext
+	}
+	plan.execUser = sqliteExecUser(ctx, dc, containerID)
+}
+
+// sqliteFileExt 读取 BACKUP_SQLITE_EXT 覆盖产物扩展名（默认由 provider 给 db）。
+// 应用导出 zip（数据 + 附件）时设为 zip。非法值忽略并告警，回落到默认。
+func sqliteFileExt(ctx context.Context, dc *dockerClient, containerID string) string {
+	env, err := dc.containerEnv(ctx, containerID)
+	if err != nil {
+		return ""
+	}
+	ext := strings.ToLower(strings.TrimSpace(env[envSQLiteBackupExt]))
+	if ext == "" {
+		return ""
+	}
+	if !sqliteFileExtPattern.MatchString(ext) {
+		logWarn("BACKUP_SQLITE_EXT 不合法，已忽略", "container", containerID, "value", ext)
+		return ""
+	}
+	return ext
+}
+
+// sqliteExecUser 决定 exec 导出命令的用户身份。
+//
+// pg/mysql 的 dump 进程只读网络，用容器默认用户即可；SQLite 的导出进程则会碰数据目录：
+// 应用停止时一个 root 身份的只读连接会创建属主为 root 的 -shm/-wal，之后降权运行的
+// 应用反而打不开自己的库。因此优先让导出与数据属主同身份：
+//
+//  1. BACKUP_SQLITE_USER（显式声明，形如 1000:1000 或用户名）
+//  2. PUID/PGID（应用以降权用户运行时的通用约定，两者都是纯数字才生效）
+//  3. 留空：沿用容器默认用户（与原有行为一致）
+func sqliteExecUser(ctx context.Context, dc *dockerClient, containerID string) string {
+	env, err := dc.containerEnv(ctx, containerID)
+	if err != nil {
+		return ""
+	}
+	if v := strings.TrimSpace(env[envSQLiteUser]); v != "" {
+		return v
+	}
+	puid, pgid := strings.TrimSpace(env["PUID"]), strings.TrimSpace(env["PGID"])
+	if isAllDigits(puid) && isAllDigits(pgid) {
+		return puid + ":" + pgid
+	}
+	return ""
+}
+
+// isAllDigits 判断字符串是否为非空纯数字。
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // shellQuote 用单引号包裹字符串，供拼接进 sh -c 的参数使用。
 func shellQuote(s string) string {
 	if s == "" {
@@ -382,5 +567,14 @@ var providers = []*backupProvider{
 		patterns:     []string{"redis", "valkey", "valkey/valkey", "valkey*", "bitnami/redis", "bitnami/valkey"},
 		fileExt:      "rdb",
 		backupMethod: redisBackupCommand,
+	},
+	{
+		// SQLite 没有官方镜像，不存在可靠的镜像名模式，只能靠容器标签
+		// backup.provider=sqlite 或容器内环境变量 BACKUP_SQLITE_CMD 识别。
+		name:         sqliteProviderName,
+		patterns:     nil,
+		fileExt:      "db",
+		backupMethod: sqliteBackupCommand,
+		prepare:      prepareSQLitePlan,
 	},
 }
