@@ -271,6 +271,10 @@ SQLite 是应用内嵌的文件型数据库，没有服务进程可连、容器�
 
 ### 应用侧约定
 
+> 完整契约（`backup` 子命令五条要求、变量语义、exec 身份、恢复语义）已上收
+> [`Felix2yu/.github/docs/backup.md`](https://github.com/Felix2yu/.github/blob/main/docs/backup.md)
+> 统一维护；本节只留最简实现示例。`scripts/check-docker.py` 按该契约检查各应用仓的 compose 声明。
+
 应用需实现 `backup` 子命令：在进程内把数据库导出为一致快照并写到 stdout。`VACUUM INTO` 是最简实现（Go 示例）：
 
 ```go

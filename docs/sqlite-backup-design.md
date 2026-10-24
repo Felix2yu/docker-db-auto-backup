@@ -1,5 +1,10 @@
 # SQLite 备份支持 —— 详细设计
 
+> **契约已上收统一规范**：应用侧 `backup` 子命令约定、`BACKUP_SQLITE_*` 变量契约、
+> exec 身份与恢复语义，以 [`Felix2yu/.github/docs/backup.md`](../../.github/docs/backup.md)
+> 为准（跨仓库一份）。本文保留**设计取舍与实测记录**，两者分工：规范改契约，本文改论证。
+> 若两处说法冲突，以 backup.md 为准。
+
 ## 1. 目标与范围
 
 为 `docker-db-auto-backup` 增加 SQLite 备份能力，覆盖「应用容器内嵌 SQLite 文件」的场景（自建服务、Vaultwarden、Home Assistant 这类应用）。
