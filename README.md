@@ -250,7 +250,9 @@ SQLite 是应用内嵌的文件型数据库，没有服务进程可连、容器�
 | 容器标签 | `backup.provider: sqlite` |
 | 环境变量 | 在应用容器内设置 `BACKUP_SQLITE_CMD`（如 `shenshi backup`），无需标签 |
 
-导出命令：`BACKUP_SQLITE_CMD` 原样生效；未设置时按镜像名推导同名二进制 + `backup`（约定：`ghcr.io/felix2yu/shenshi` → `shenshi backup`）。命令统一经容器内 `sh -c` 执行，因此**推导出的名字必须能被容器内 shell 解析**。本舰队的镜像把二进制装在 `/app`（不在 `PATH` 上），所以镜像名推导在这族镜像上不成立，必须显式声明绝对路径：`BACKUP_SQLITE_CMD=/app/<app> backup`。
+导出命令：`BACKUP_SQLITE_CMD` 直接生效；未设置时按镜像名推导同名二进制 + `backup`（约定：`ghcr.io/felix2yu/shenshi` → `shenshi backup`）。命令统一经容器内 `sh -c` 执行，因此**推导出的名字必须能被容器内 shell 解析**。本舰队的镜像把二进制装在 `/app`（不在 `PATH` 上），所以镜像名推导在这族镜像上不成立，必须显式声明绝对路径：`BACKUP_SQLITE_CMD=/app/<app> backup`。
+
+值应**裸写**（compose 映射式 `KEY: value`，或整条 `KEY=VALUE` 加外层引号 `- "KEY=value"`）。若写成列表式 `- KEY="value"`，引号会原样存进变量值——`sh -c` 收到 `"/app/<app> backup"` 会把整串（含空格）当单个命令名，报 command not found。读取时工具会剥掉最外层成对引号兜底（`BACKUP_SQLITE_CMD`/`EXT`/`USER` 与 `PUID`/`PGID` 同口径），但显式裸写才是正解。
 
 两条识别路径能做到的事不同，据实测：
 
@@ -266,6 +268,8 @@ SQLite 是应用内嵌的文件型数据库，没有服务进程可连、容器�
 | `BACKUP_SQLITE_CMD` | 镜像名推导 | 自导出命令（空格分隔），设置即视为声明 sqlite 容器 |
 | `BACKUP_SQLITE_EXT` | `db` | 产物扩展名。应用把数据与附件一起打成 zip 时设为 `zip`，工具会按 zip 魔数校验并按 `.zip` 命名落盘 |
 | `BACKUP_SQLITE_USER` | 由 `PUID`/`PGID` 推导 | exec 导出命令的用户身份（如 `1000:1000`）。容器未设置 `PUID`/`PGID` 时留空，沿用容器默认用户 |
+
+三个变量（以及 `PUID`/`PGID`）的读取口径统一：去空白 + 剥最外层成对引号（`"…"`、`'…'`），不成对的引号原样保留。
 
 `BACKUP_SQLITE_USER` 的意义：pg/mysql 的 dump 只读网络，用容器默认用户即可；SQLite 的导出进程会碰数据目录——若应用停止时以 root 身份建立只读连接，会创建属主为 root 的 `-shm`/`-wal`，之后降权运行的应用反而打不开自己的库。因此导出进程应尽量与数据属主同身份（`PUID`/`PGID` 是这类镜像的通用约定）。
 

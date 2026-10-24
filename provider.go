@@ -336,8 +336,10 @@ const sqliteProviderName = "sqlite"
 
 // envSQLiteBackupCmd 是应用容器自描述的导出命令（空格分隔），例如：
 //
-//	BACKUP_SQLITE_CMD="shenshi backup"
+//	BACKUP_SQLITE_CMD=shenshi backup
 //
+// 值应裸写（compose 映射式或整条 KEY=VALUE 加外层引号）。若写成 KEY="value"，
+// 引号会存进值里，读取时由 envValue 剥掉最外层成对引号兜底。
 // 设置该变量的容器会被自动识别为 sqlite provider，无需打 backup.provider 标签。
 const envSQLiteBackupCmd = "BACKUP_SQLITE_CMD"
 
@@ -358,6 +360,24 @@ const sqliteProbeTimeout = 10 * time.Second
 // sqliteBinaryNamePattern 约束从镜像名推导出的二进制名，防止拼接进 sh -c 时被注入。
 var sqliteBinaryNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
+// stripEnvQuotes 剥掉环境变量值最外层的一对成对引号。
+//
+// compose 列表式 `- KEY="value"` 与 `docker run -e 'KEY="value"'` 都会把引号原样
+// 存进值里：sh -c 收到 `"/app/app backup"` 时，整串（含空格）被当成单个命令名，
+// 报 command not found。契约值是裸命令/裸扩展名/裸身份，最外层引号没有语义，剥掉。
+// 不成对的引号保持原样——那不是引号包裹，是值本身的内容。
+func stripEnvQuotes(v string) string {
+	if n := len(v); n >= 2 && (v[0] == '"' || v[0] == '\'') && v[n-1] == v[0] {
+		return v[1 : n-1]
+	}
+	return v
+}
+
+// envValue 读取契约环境变量：去空白 + 剥最外层成对引号。
+func envValue(env map[string]string, key string) string {
+	return stripEnvQuotes(strings.TrimSpace(env[key]))
+}
+
 // sqliteBackupCommand 生成 SQLite 备份命令（E 方案：应用自导出）。
 //
 // 命令来源优先级：
@@ -369,7 +389,7 @@ var sqliteBinaryNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 func sqliteBackupCommand(ctx context.Context, cfg *config, dc *dockerClient, containerID string) ([]string, []string, error) {
 	if env, err := dc.containerEnv(ctx, containerID); err != nil {
 		logDebug("读取容器环境变量失败，改用镜像名推导 SQLite 备份命令", "container", containerID, "error", err)
-	} else if declared := strings.TrimSpace(env[envSQLiteBackupCmd]); declared != "" {
+	} else if declared := envValue(env, envSQLiteBackupCmd); declared != "" {
 		return []string{"sh", "-c", declared}, nil, nil
 	}
 
@@ -410,7 +430,7 @@ func probeSQLiteContainer(ctx context.Context, dc *dockerClient, containerID str
 		logDebug("读取容器环境变量失败，跳过 SQLite 识别", "container", containerID, "error", err)
 		return false, false
 	}
-	if strings.TrimSpace(env[envSQLiteBackupCmd]) != "" {
+	if envValue(env, envSQLiteBackupCmd) != "" {
 		return true, true
 	}
 	for _, v := range env {
@@ -454,7 +474,7 @@ func sqliteFileExt(ctx context.Context, dc *dockerClient, containerID string) st
 	if err != nil {
 		return ""
 	}
-	ext := strings.ToLower(strings.TrimSpace(env[envSQLiteBackupExt]))
+	ext := strings.ToLower(envValue(env, envSQLiteBackupExt))
 	if ext == "" {
 		return ""
 	}
@@ -479,10 +499,10 @@ func sqliteExecUser(ctx context.Context, dc *dockerClient, containerID string) s
 	if err != nil {
 		return ""
 	}
-	if v := strings.TrimSpace(env[envSQLiteUser]); v != "" {
+	if v := envValue(env, envSQLiteUser); v != "" {
 		return v
 	}
-	puid, pgid := strings.TrimSpace(env["PUID"]), strings.TrimSpace(env["PGID"])
+	puid, pgid := envValue(env, "PUID"), envValue(env, "PGID")
 	if isAllDigits(puid) && isAllDigits(pgid) {
 		return puid + ":" + pgid
 	}

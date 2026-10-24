@@ -78,6 +78,42 @@ func TestSqliteBackupCommandEnvOverride(t *testing.T) {
 	}
 }
 
+// TestSqliteBackupCommandEnvQuoted 覆盖引号剥壳：compose 列表式 KEY="value" 会把引号
+// 存进值里，sh -c 整串被当命令名。契约值是最外层引号无语义，读取时剥掉。
+func TestSqliteBackupCommandEnvQuoted(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{"双引号包裹", `BACKUP_SQLITE_CMD="/app/mujian backup"`, "/app/mujian backup"},
+		{"单引号包裹", `BACKUP_SQLITE_CMD='/app/mujian backup'`, "/app/mujian backup"},
+		{"裸值不受影响", `BACKUP_SQLITE_CMD=/app/mujian backup`, "/app/mujian backup"},
+		{"内部引号不剥", `BACKUP_SQLITE_CMD=/app/backup --note "hi"`, `/app/backup --note "hi"`},
+		{"不成对引号不剥", `BACKUP_SQLITE_CMD="/app/mujian`, `"/app/mujian`},
+	}
+	for _, c := range cases {
+		fake := newFakeAPIClient()
+		fake.execHandler = func(cmd []string) ([]byte, []byte, int) {
+			if len(cmd) == 1 && cmd[0] == "env" {
+				return []byte(c.env + "\n"), nil, 0
+			}
+			return nil, nil, 0
+		}
+		cid := "cid-quoted"
+		setupSQLiteFake(fake, cid, "felix2yu/mujian:latest")
+		dc := newFakeDockerClient(fake)
+
+		cmd, _, err := sqliteBackupCommand(context.Background(), nil, dc, cid)
+		if err != nil {
+			t.Fatalf("%s: sqliteBackupCommand: %v", c.name, err)
+		}
+		if len(cmd) != 3 || cmd[2] != c.want {
+			t.Errorf("%s: cmd = %v, want sh -c %q", c.name, cmd, c.want)
+		}
+	}
+}
+
 // TestSqliteBackupCommandEnvReadErrorFallsBack 覆盖 env 不可读时回退镜像名推导（而不是直接失败）。
 func TestSqliteBackupCommandEnvReadErrorFallsBack(t *testing.T) {
 	fake := newFakeAPIClient()
@@ -304,6 +340,8 @@ func TestSqliteFileExtOverride(t *testing.T) {
 	}{
 		{"BACKUP_SQLITE_EXT=zip\n", "zip"},
 		{"BACKUP_SQLITE_EXT=ZIP\n", "zip"},
+		{"BACKUP_SQLITE_EXT=\"zip\"\n", "zip"},
+		{"BACKUP_SQLITE_EXT='zip'\n", "zip"},
 		{"", "db"},
 		{"BACKUP_SQLITE_EXT=../evil\n", "db"},
 		{"BACKUP_SQLITE_EXT=db.bak\n", "db"},
@@ -345,6 +383,9 @@ func TestSqliteExecUser(t *testing.T) {
 		{"PUID=1000\n", ""},
 		{"PUID=abc\nPGID=1000\n", ""},
 		{"BACKUP_SQLITE_USER=1001:1002\nPUID=1000\nPGID=1000\n", "1001:1002"},
+		{"BACKUP_SQLITE_USER=\"1001:1002\"\n", "1001:1002"},
+		{"BACKUP_SQLITE_USER='root'\n", "root"},
+		{"PUID=\"1000\"\nPGID=\"1000\"\n", "1000:1000"},
 		{"BACKUP_SQLITE_USER=root\n", "root"},
 	}
 	for _, c := range cases {
