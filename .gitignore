@@ -153,7 +153,89 @@ backups
 # Go coverage output
 coverage.out
 
+# 构建产物
+/bin/
+
+# ---- 编辑器 / IDE 本地状态（不进版本库）----
+.idea/
+.vscode/
+.vscode-test/
+.history/
+.fleet/
+*.iml
+*.swp
+*.swo
+*~
+
+# ---- 系统垃圾文件（macOS / Windows / Linux 都会生成）----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.pid
+
+# ---- 通用本地缓存 / 测试产物（各仓再按技术栈补充）----
+.cache/
+.tmp/
+.pnpm-store/
+*.log
+*.test
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+*.o
+*.lo
+*.la
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- 密钥 / 签名文件（绝不入库）----
+.env
+.env.local
+.env.*.local
+secrets/
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+*.provisionprofile
+
+# ---- Swift / Xcode 本地状态 ----
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
 # ---- AI Agent 生成目录（不进版本库，本地保留）----
+# 各家 AI 编程工具落盘的会话记忆、规则缓存与索引。规则是目录级：
+# 想共享的项目级配置请放 docs/ 或仓库根具名单文件，不要只忽略子目录。
 .workbuddy/
 .trae/
 .trea/
@@ -167,11 +249,100 @@ coverage.out
 .windsurf/
 .aider*
 .zcode/
+.mimocode/
+.codebuddy/
+.roo/
+.cline/
+.clinerules/
+.kilocode/
+.kilocodemodes
+.kiro/
+.junie/
+.amazonq/
+.spec-gen/
+.openlore/
+.bmad/
+_bmad/
+_bmad-output/
+.sourcegraph/
+.devin/
+.factory/
+.firebender/
 
-# ---- 系统垃圾文件（macOS / Windows 都会生成）----
+# ---- 编辑器 / IDE 本地状态（不进版本库）----
+.idea/
+.vscode/
+.vscode-test/
+.history/
+.fleet/
+*.iml
+*.swp
+*.swo
+*~
+
+# ---- 系统垃圾文件（macOS / Windows / Linux 都会生成）----
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+.AppleDouble
+.LSOverride
 Thumbs.db
+ehthumbs.db
 desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.pid
 
-# 构建产物
-/bin/
+# ---- 通用本地缓存 / 测试产物（各仓再按技术栈补充）----
+.cache/
+.tmp/
+node_modules/
+.pnpm-store/
+*.log
+*.test
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+*.o
+*.lo
+*.la
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- 密钥 / 签名文件（绝不入库）----
+.env
+.env.local
+.env.*.local
+secrets/
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+*.provisionprofile
+
+# ---- Swift / Xcode 本地状态 ----
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
